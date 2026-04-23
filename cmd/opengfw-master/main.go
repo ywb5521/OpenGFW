@@ -27,6 +27,7 @@ import (
 func main() {
 	listen := flag.String("listen", ":8080", "master listen address")
 	databaseURL := flag.String("database-url", envOrDefault("OPENGFW_DATABASE_URL", envOrDefault("DATABASE_URL", "")), "PostgreSQL database URL")
+	projectRoot := flag.String("project-root", envOrDefault("OPENGFW_PROJECT_ROOT", ""), "OpenGFW project root used for managed agent builds")
 	eventRetention := flag.Duration("event-retention", 0, "traffic event retention duration, 0 disables pruning")
 	metricRetention := flag.Duration("metric-retention", 0, "metric retention duration, 0 disables pruning")
 	retentionInterval := flag.Duration("retention-interval", time.Hour, "database retention sweep interval")
@@ -67,7 +68,7 @@ func main() {
 	releaseSvc := release.NewServiceWithSnapshotAndStore(releaseSnapshot, nil, store)
 	ingestSvc := ingest.NewServiceWithSnapshotAndAppenders(10000, 10000, ingestSnapshot, nil, store.AppendEvents, store.AppendMetrics)
 	reportSvc := reportsvc.NewServiceWithQueries(nodeSvc, ingestSvc, store)
-	agentBuilder, err := agentbuild.NewService(agentbuild.Config{})
+	agentBuilder, err := agentbuild.NewService(agentbuild.Config{ProjectRoot: *projectRoot})
 	if err != nil {
 		logger.Warn("managed agent binary builder disabled", zap.Error(err))
 	}

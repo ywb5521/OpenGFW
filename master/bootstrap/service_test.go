@@ -1,9 +1,11 @@
 package bootstrap
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/apernet/OpenGFW/master/agentbuild"
 	"github.com/apernet/OpenGFW/pkg/models"
 )
 
@@ -37,5 +39,23 @@ func TestShellEscape(t *testing.T) {
 	want := `'ab'\''cd'`
 	if got != want {
 		t.Fatalf("unexpected shell escape: got %s want %s", got, want)
+	}
+}
+
+func TestBuildAgentBinariesTypedNilBuilderReturnsError(t *testing.T) {
+	var builder *agentbuild.Service
+	installer := NewSSHInstaller(builder)
+
+	_, err := installer.BuildAgentBinaries(context.Background(), models.AgentBuildRequest{
+		Targets: []models.AgentBuildTarget{{
+			GOOS:   "linux",
+			GOARCH: "amd64",
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected nil builder to return an error")
+	}
+	if !strings.Contains(err.Error(), "managed agent binary builder is not configured") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

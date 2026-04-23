@@ -100,6 +100,9 @@ func (execRunner) Run(ctx context.Context, dir string, env []string, args []stri
 }
 
 func (s *Service) EnsureBinary(ctx context.Context, req models.AgentBuildRequest) (*models.AgentBuildInfo, error) {
+	if s == nil {
+		return nil, fmt.Errorf("managed agent binary builder is not configured")
+	}
 	goos := strings.TrimSpace(req.GOOS)
 	if goos == "" {
 		goos = runtime.GOOS
@@ -167,6 +170,9 @@ func (s *Service) EnsureBinary(ctx context.Context, req models.AgentBuildRequest
 }
 
 func (s *Service) EnsureBinaries(ctx context.Context, req models.AgentBuildRequest) ([]models.AgentBuildInfo, error) {
+	if s == nil {
+		return nil, fmt.Errorf("managed agent binary builder is not configured")
+	}
 	targets := req.Targets
 	if len(targets) == 0 {
 		targets = []models.AgentBuildTarget{{
@@ -207,6 +213,9 @@ func (s *Service) EnsureBinaries(ctx context.Context, req models.AgentBuildReque
 }
 
 func (s *Service) sourceModifiedAt() (time.Time, error) {
+	if s == nil {
+		return time.Time{}, fmt.Errorf("managed agent binary builder is not configured")
+	}
 	var latest time.Time
 	found := false
 	for _, relative := range s.sourcePaths {
