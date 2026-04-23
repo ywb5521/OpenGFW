@@ -56,6 +56,9 @@ func TestRenderInstallScript(t *testing.T) {
 	if !strings.Contains(script, `Environment="OPENGFW_BOOTSTRAP_TOKEN=token-123"`) {
 		t.Fatalf("expected bootstrap token in systemd service, got:\n%s", script)
 	}
+	if !strings.Contains(script, "AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW") {
+		t.Fatalf("expected nfqueue capabilities in systemd service, got:\n%s", script)
+	}
 	if !strings.Contains(script, `"--master" "https://master.example.com"`) {
 		t.Fatalf("expected master URL in service content, got:\n%s", script)
 	}

@@ -32,6 +32,15 @@ func TestRenderSystemdService(t *testing.T) {
 	if strings.Contains(unit, `"--version" "0.1.0"`) {
 		t.Fatalf("expected unit to avoid pinning agent version, got:\n%s", unit)
 	}
+	if !strings.Contains(unit, "User=root") {
+		t.Fatalf("expected unit to run as root, got:\n%s", unit)
+	}
+	if !strings.Contains(unit, "AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW") {
+		t.Fatalf("expected nfqueue capabilities in unit, got:\n%s", unit)
+	}
+	if !strings.Contains(unit, "CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW") {
+		t.Fatalf("expected capability bounding set in unit, got:\n%s", unit)
+	}
 }
 
 func TestShellEscape(t *testing.T) {
