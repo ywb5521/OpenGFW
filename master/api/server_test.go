@@ -314,6 +314,65 @@ func TestReportRulesEndpoint(t *testing.T) {
 	}
 }
 
+func TestReportBreakdownEndpoint(t *testing.T) {
+	nodeSvc := node.NewService()
+	if _, err := nodeSvc.Register(models.RegistrationRequest{AgentID: "agent-1", Name: "edge-1"}); err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+	ingestSvc := ingest.NewService(100, 100)
+	ingestSvc.IngestEvents(models.EventBatch{
+		AgentID: "agent-1",
+		Events: []models.TrafficEvent{
+			{
+				Type:  "rule_hit",
+				Proto: "tcp",
+				SrcIP: "10.0.0.1",
+				DstIP: "1.1.1.1",
+				Time:  time.Now().UTC(),
+				Props: map[string]any{
+					"tls": map[string]any{
+						"req": map[string]any{"sni": "api.example.com"},
+					},
+				},
+			},
+			{
+				Type:  "stream_action",
+				Proto: "udp",
+				SrcIP: "10.0.0.1",
+				DstIP: "8.8.8.8",
+				Time:  time.Now().UTC().Add(time.Second),
+			},
+		},
+	})
+	reportSvc := reportsvc.NewService(nodeSvc, ingestSvc)
+	server := NewServer(nil, nodeSvc, policy.NewService(), release.NewService(), ingestSvc, reportSvc, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/reports/breakdown?agentId=agent-1&limit=5", nil)
+	rec := httptest.NewRecorder()
+	server.http.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var result models.EventBreakdown
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(result.SourceIPs) != 1 || result.SourceIPs[0].Value != "10.0.0.1" || result.SourceIPs[0].Events != 2 {
+		t.Fatalf("unexpected source ip breakdown: %+v", result.SourceIPs)
+	}
+	if len(result.DestinationIPs) != 2 {
+		t.Fatalf("unexpected destination ip breakdown: %+v", result.DestinationIPs)
+	}
+	if len(result.SNIs) != 1 || result.SNIs[0].Value != "api.example.com" {
+		t.Fatalf("unexpected sni breakdown: %+v", result.SNIs)
+	}
+	if len(result.Protocols) != 2 {
+		t.Fatalf("unexpected protocol breakdown: %+v", result.Protocols)
+	}
+}
+
 func TestReportMetricsEndpointSupportsAgentFilter(t *testing.T) {
 	nodeSvc := node.NewService()
 	if _, err := nodeSvc.Register(models.RegistrationRequest{AgentID: "agent-1", Name: "edge-1"}); err != nil {

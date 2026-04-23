@@ -58,6 +58,14 @@ func (s fakeQueryStore) QueryTrafficSeries(query models.TimeRangeQuery) (models.
 	}, nil
 }
 
+func (s fakeQueryStore) QueryEventBreakdown(query models.TimeRangeQuery) (models.EventBreakdown, error) {
+	return models.EventBreakdown{
+		SourceIPs: []models.EventBreakdownItem{
+			{Value: "10.0.0.1", Events: 3, SuspiciousEvents: 1},
+		},
+	}, nil
+}
+
 func TestServicePrefersQueryBackend(t *testing.T) {
 	nodeSvc := node.NewService()
 	_, err := nodeSvc.Register(models.RegistrationRequest{
@@ -97,5 +105,10 @@ func TestServicePrefersQueryBackend(t *testing.T) {
 	metrics := svc.Metrics(models.MetricQuery{})
 	if metrics.Total != 1 || metrics.Metrics[0].Name != "db_metric" {
 		t.Fatalf("unexpected metrics result: %+v", metrics)
+	}
+
+	breakdown := svc.EventBreakdown(models.TimeRangeQuery{})
+	if len(breakdown.SourceIPs) != 1 || breakdown.SourceIPs[0].Value != "10.0.0.1" {
+		t.Fatalf("unexpected event breakdown result: %+v", breakdown)
 	}
 }

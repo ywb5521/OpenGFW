@@ -974,6 +974,44 @@ func (s *PostgresStore) QueryTrafficSeries(query models.TimeRangeQuery) (models.
 	return models.TimeSeriesResponse{Buckets: buckets}, nil
 }
 
+func (s *PostgresStore) QueryEventBreakdown(query models.TimeRangeQuery) (models.EventBreakdown, error) {
+	whereSQL, args := buildTimeWhere("event_time", query.Since, query.Until)
+	if query.AgentID != "" {
+		args = append(args, query.AgentID)
+		clause := fmt.Sprintf("agent_id = $%d", len(args))
+		if whereSQL == "" {
+			whereSQL = clause
+		} else {
+			whereSQL += " AND " + clause
+		}
+	}
+
+	limit := normalizeLimit(query.Limit, 8)
+	sourceIPs, err := s.queryEventBreakdownItems("payload->>'srcIp'", false, whereSQL, args, limit)
+	if err != nil {
+		return models.EventBreakdown{}, err
+	}
+	destinationIPs, err := s.queryEventBreakdownItems("payload->>'dstIp'", false, whereSQL, args, limit)
+	if err != nil {
+		return models.EventBreakdown{}, err
+	}
+	snis, err := s.queryEventBreakdownItems("COALESCE(NULLIF(payload->'props'->'tls'->'req'->>'sni', ''), NULLIF(payload->'props'->'quic'->'req'->>'sni', ''))", false, whereSQL, args, limit)
+	if err != nil {
+		return models.EventBreakdown{}, err
+	}
+	protocols, err := s.queryEventBreakdownItems("proto", true, whereSQL, args, limit)
+	if err != nil {
+		return models.EventBreakdown{}, err
+	}
+
+	return models.EventBreakdown{
+		SourceIPs:      sourceIPs,
+		DestinationIPs: destinationIPs,
+		SNIs:           snis,
+		Protocols:      protocols,
+	}, nil
+}
+
 func (s *PostgresStore) SaveSequence(name string, value uint64) error {
 	_, err := s.db.Exec(`
 		INSERT INTO master_sequences (name, value)
@@ -1354,6 +1392,56 @@ func reverseMetrics(metrics []models.MetricSample) {
 	for i, j := 0, len(metrics)-1; i < j; i, j = i+1, j-1 {
 		metrics[i], metrics[j] = metrics[j], metrics[i]
 	}
+}
+
+func (s *PostgresStore) queryEventBreakdownItems(valueExpr string, includeUnknown bool, whereSQL string, args []any, limit int) ([]models.EventBreakdownItem, error) {
+	groupExpr := fmt.Sprintf("NULLIF(%s, '')", valueExpr)
+	if includeUnknown {
+		groupExpr = fmt.Sprintf("COALESCE(NULLIF(%s, ''), 'unknown')", valueExpr)
+	}
+
+	sqlText := `
+		SELECT
+			value,
+			COUNT(*) AS events,
+			COUNT(*) FILTER (WHERE event_type = 'suspicious_flow' OR suspicion > 0) AS suspicious_events,
+			MAX(event_time) AS last_seen_at
+		FROM (
+			SELECT
+				event_time,
+				event_type,
+				suspicion,
+				` + groupExpr + ` AS value
+			FROM master_traffic_events
+	`
+	if whereSQL != "" {
+		sqlText += " WHERE " + whereSQL
+	}
+	sqlText += `
+		) grouped
+		WHERE value IS NOT NULL
+		GROUP BY value
+		ORDER BY events DESC, value ASC
+	`
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit)
+	sqlText += fmt.Sprintf(" LIMIT $%d", len(queryArgs))
+
+	rows, err := s.db.Query(sqlText, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]models.EventBreakdownItem, 0)
+	for rows.Next() {
+		var item models.EventBreakdownItem
+		if err := rows.Scan(&item.Value, &item.Events, &item.SuspiciousEvents, &item.LastSeenAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func nullableString(v string) any {

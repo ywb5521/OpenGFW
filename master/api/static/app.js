@@ -228,6 +228,9 @@ const ChartPanel = {
       resizeObserver: null,
       resizeHandler: null,
       rafId: 0,
+      chartMouseMoveHandler: null,
+      chartMouseLeaveHandler: null,
+      chartAxisPointerHandler: null,
     };
   },
   methods: {
@@ -286,6 +289,7 @@ const ChartPanel = {
         this.rendered = false;
         return;
       }
+      this.bindChartEvents();
       try {
         this.chart.setOption(this.option, true);
         this.rendered = true;
@@ -297,6 +301,37 @@ const ChartPanel = {
 
     handleResize() {
       this.scheduleRender();
+    },
+
+    bindChartEvents() {
+      if (!this.chart) {
+        return;
+      }
+      if (!this.chartMouseMoveHandler) {
+        this.chartMouseMoveHandler = (params) => {
+          if (params && params.componentType === "series") {
+            this.$emit("chart-hover", params);
+          }
+        };
+      }
+      if (!this.chartMouseLeaveHandler) {
+        this.chartMouseLeaveHandler = () => {
+          this.$emit("chart-leave");
+        };
+      }
+      if (!this.chartAxisPointerHandler) {
+        this.chartAxisPointerHandler = (payload) => {
+          this.$emit("chart-axis-pointer", payload);
+        };
+      }
+      this.chart.off("mousemove");
+      this.chart.off("click");
+      this.chart.off("globalout");
+      this.chart.off("updateAxisPointer");
+      this.chart.on("mousemove", this.chartMouseMoveHandler);
+      this.chart.on("click", this.chartMouseMoveHandler);
+      this.chart.on("globalout", this.chartMouseLeaveHandler);
+      this.chart.on("updateAxisPointer", this.chartAxisPointerHandler);
     },
   },
   mounted() {
@@ -350,6 +385,31 @@ function defaultAuth() {
     authenticated: false,
     setupRequired: false,
     user: null,
+  };
+}
+
+function defaultEventBreakdown() {
+  return {
+    sourceIps: [],
+    destinationIps: [],
+    snis: [],
+    protocols: [],
+  };
+}
+
+function defaultNodeTimeRange(now = new Date()) {
+  const end = new Date(now);
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  return [start, end];
+}
+
+function normalizeEventBreakdown(value) {
+  return {
+    sourceIps: Array.isArray(value?.sourceIps) ? value.sourceIps : [],
+    destinationIps: Array.isArray(value?.destinationIps) ? value.destinationIps : [],
+    snis: Array.isArray(value?.snis) ? value.snis : [],
+    protocols: Array.isArray(value?.protocols) ? value.protocols : [],
   };
 }
 
@@ -508,6 +568,20 @@ function prettyJson(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function buildTooltipHtml(title, lines) {
+  return [title].concat(lines).join("<br />");
+}
+
+function normalizeTooltipParams(params) {
+  if (Array.isArray(params)) {
+    return params;
+  }
+  if (params === null || params === undefined) {
+    return [];
+  }
+  return [params];
+}
+
 function loadSessionToken() {
   if (runtimeSessionToken) {
     return runtimeSessionToken;
@@ -627,10 +701,28 @@ function buildTrafficTrendOption(buckets) {
     },
     tooltip: {
       trigger: "axis",
+      triggerOn: "mousemove|click",
+      confine: true,
+      renderMode: "richText",
+      axisPointer: {
+        type: "line",
+        snap: true,
+      },
       backgroundColor: "rgba(255,255,255,0.96)",
       borderColor: CHART_COLORS.grid,
       textStyle: {
         color: "#0f172a",
+      },
+      formatter(params) {
+        const list = normalizeTooltipParams(params);
+        if (!list.length) {
+          return "事件趋势";
+        }
+        const rawIndex = Number(list[0]?.dataIndex ?? -1);
+        const bucket = rawIndex >= 0 ? buckets[rawIndex] : null;
+        const title = bucket?.timestamp ? formatTime(bucket.timestamp, true) : (list[0]?.axisValueLabel || list[0]?.name || "事件趋势");
+        const lines = list.map((item) => `${item.seriesName}: ${formatNumber(item.value || 0)}`);
+        return [title].concat(lines).join("\n");
       },
     },
     xAxis: {
@@ -664,12 +756,18 @@ function buildTrafficTrendOption(buckets) {
         name: "事件总量",
         type: "line",
         smooth: true,
-        showSymbol: false,
+        showSymbol: true,
+        symbol: "circle",
+        symbolSize: 7,
         areaStyle: {
           color: CHART_COLORS.fill,
         },
         lineStyle: {
           width: 3,
+        },
+        emphasis: {
+          focus: "series",
+          scale: true,
         },
         data: buckets.map((bucket) => bucket.events || 0),
       },
@@ -677,9 +775,15 @@ function buildTrafficTrendOption(buckets) {
         name: "规则命中",
         type: "line",
         smooth: true,
-        showSymbol: false,
+        showSymbol: true,
+        symbol: "circle",
+        symbolSize: 7,
         lineStyle: {
           width: 2,
+        },
+        emphasis: {
+          focus: "series",
+          scale: true,
         },
         data: buckets.map((bucket) => bucket.ruleHits || 0),
       },
@@ -687,10 +791,16 @@ function buildTrafficTrendOption(buckets) {
         name: "可疑流量",
         type: "line",
         smooth: true,
-        showSymbol: false,
+        showSymbol: true,
+        symbol: "circle",
+        symbolSize: 7,
         lineStyle: {
           width: 2,
           type: "dashed",
+        },
+        emphasis: {
+          focus: "series",
+          scale: true,
         },
         data: buckets.map((bucket) => bucket.suspicious || 0),
       },
@@ -713,6 +823,12 @@ function buildEventTypeOption(entries) {
       borderColor: CHART_COLORS.grid,
       textStyle: {
         color: "#0f172a",
+      },
+      formatter(params) {
+        return buildTooltipHtml(params.name, [
+          `事件数：${formatNumber(params.value || 0)}`,
+          `占比：${params.percent || 0}%`,
+        ]);
       },
     },
     legend: {
@@ -767,16 +883,20 @@ function buildEventTypeOption(entries) {
   };
 }
 
-function buildHorizontalBarOption(items, getLabel, getValue, getColor = () => CHART_COLORS.primary) {
+function buildHorizontalBarOption(items, getLabel, getValue, getColor = () => CHART_COLORS.primary, options = {}) {
+  const maxLabelLength = Number(options.maxLabelLength || 14);
+  const maxItems = Number(options.maxItems || 8);
+  const yAxisLabelWidth = Number(options.yAxisLabelWidth || 104);
   const rows = items
     .map((item) => ({
+      item,
       rawLabel: getLabel(item),
-      label: truncate(getLabel(item), 14),
+      label: truncate(getLabel(item), maxLabelLength),
       value: Number(getValue(item) || 0),
       color: getColor(item),
     }))
     .filter((item) => item.value > 0)
-    .slice(0, 8)
+    .slice(0, maxItems)
     .reverse();
 
   if (!rows.length) {
@@ -793,18 +913,24 @@ function buildHorizontalBarOption(items, getLabel, getValue, getColor = () => CH
       containLabel: true,
     },
     tooltip: {
-      trigger: "axis",
-      axisPointer: {
-        type: "shadow",
-      },
+      trigger: "item",
       backgroundColor: "rgba(255,255,255,0.96)",
       borderColor: CHART_COLORS.grid,
       textStyle: {
         color: "#0f172a",
       },
-      formatter(params) {
-        const row = rows[params[0].dataIndex];
-        return `${row.rawLabel}<br />${formatNumber(row.value)}`;
+      formatter(param) {
+        const index = Number(param?.dataIndex ?? -1);
+        if (index < 0) {
+          return "";
+        }
+        const row = rows[index];
+        if (typeof options.tooltipFormatter === "function") {
+          return options.tooltipFormatter(row);
+        }
+        return buildTooltipHtml(row.rawLabel, [
+          `数值：${formatNumber(row.value)}`,
+        ]);
       },
     },
     xAxis: {
@@ -824,7 +950,7 @@ function buildHorizontalBarOption(items, getLabel, getValue, getColor = () => CH
       data: rows.map((row) => row.label),
       axisLabel: {
         ...axisTextStyle(),
-        width: 104,
+        width: yAxisLabelWidth,
         overflow: "truncate",
       },
       axisLine: {
@@ -853,6 +979,20 @@ function buildHorizontalBarOption(items, getLabel, getValue, getColor = () => CH
 function buildHealthGaugeOption(onlineRate, suspiciousRate) {
   return {
     animationDuration: 350,
+    tooltip: {
+      trigger: "item",
+      backgroundColor: "rgba(255,255,255,0.96)",
+      borderColor: CHART_COLORS.grid,
+      textStyle: {
+        color: "#0f172a",
+      },
+      formatter() {
+        return buildTooltipHtml("节点健康度", [
+          `在线率：${onlineRate}%`,
+          `风险占比：${suspiciousRate}%`,
+        ]);
+      },
+    },
     series: [
       {
         type: "gauge",
@@ -912,6 +1052,21 @@ function buildHealthStatusOption(onlineRate, suspiciousRate) {
       bottom: 4,
       left: 8,
       containLabel: true,
+    },
+    tooltip: {
+      trigger: "item",
+      backgroundColor: "rgba(255,255,255,0.96)",
+      borderColor: CHART_COLORS.grid,
+      textStyle: {
+        color: "#0f172a",
+      },
+      formatter(param) {
+        const item = param || null;
+        const label = item?.axisValue || "指标";
+        return buildTooltipHtml(label, [
+          `占比：${formatNumber(item?.value || 0)}%`,
+        ]);
+      },
     },
     xAxis: {
       type: "value",
@@ -1081,12 +1236,15 @@ createApp({
       rules: [],
       protocols: [],
       trafficSeries: [],
+      overviewTrafficHoverIndex: -1,
       nodes: [],
       selectedNode: null,
       selectedNodeTasks: [],
-      selectedNodeEvents: [],
       selectedNodeReport: null,
       selectedNodeTrafficSeries: [],
+      selectedNodeBreakdown: defaultEventBreakdown(),
+      selectedNodeTimeRange: defaultNodeTimeRange(),
+      selectedNodeTrafficHoverIndex: -1,
       eventDetailDialogVisible: false,
       eventDetailEvent: null,
       eventRows: [],
@@ -1249,18 +1407,49 @@ createApp({
     trafficTrendOption() {
       return buildTrafficTrendOption(this.trafficSeries);
     },
+    overviewTrafficHoverBucket() {
+      if (this.overviewTrafficHoverIndex >= 0 && this.overviewTrafficHoverIndex < this.trafficSeries.length) {
+        return this.trafficSeries[this.overviewTrafficHoverIndex];
+      }
+      return this.trafficSeries[this.trafficSeries.length - 1] || null;
+    },
+    overviewTrafficHoverTitle() {
+      return this.overviewTrafficHoverIndex >= 0 ? "悬浮详情" : "最新时间点";
+    },
     eventTypeOption() {
       return buildEventTypeOption(this.eventTypeEntries);
     },
     ruleHitsOption() {
-      return buildHorizontalBarOption(this.rules, (item) => item.ruleName || "unknown", (item) => item.hits || 0, () => CHART_COLORS.primary);
+      return buildHorizontalBarOption(
+        this.rules,
+        (item) => item.ruleName || "unknown",
+        (item) => item.hits || 0,
+        () => CHART_COLORS.primary,
+        {
+          maxLabelLength: 18,
+          yAxisLabelWidth: 128,
+          tooltipFormatter: (row) => buildTooltipHtml(row.rawLabel, [
+            `命中次数：${formatNumber(row.item?.hits || 0)}`,
+            `动作次数：${formatNumber(row.item?.actions || 0)}`,
+            `最近命中：${formatTime(row.item?.lastHitAt, true)}`,
+          ]),
+        }
+      );
     },
     protocolOption() {
       return buildHorizontalBarOption(
         this.protocols,
         (item) => item.protocol || "unknown",
         (item) => item.events || 0,
-        (item) => (Number(item.suspiciousEvents || 0) > 0 ? CHART_COLORS.warning : CHART_COLORS.secondary)
+        (item) => (Number(item.suspiciousEvents || 0) > 0 ? CHART_COLORS.warning : CHART_COLORS.secondary),
+        {
+          maxLabelLength: 18,
+          tooltipFormatter: (row) => buildTooltipHtml(row.rawLabel, [
+            `事件数：${formatNumber(row.item?.events || 0)}`,
+            `可疑流量：${formatNumber(row.item?.suspiciousEvents || 0)}`,
+            `最近出现：${formatTime(row.item?.lastSeenAt, true)}`,
+          ]),
+        }
       );
     },
     nodeVolumeOption() {
@@ -1268,7 +1457,16 @@ createApp({
         this.nodeStats,
         (item) => item.agentId || "node",
         (item) => item.events || 0,
-        (item) => (Number(item.suspiciousEvents || 0) > 0 ? CHART_COLORS.danger : CHART_COLORS.primary)
+        (item) => (Number(item.suspiciousEvents || 0) > 0 ? CHART_COLORS.danger : CHART_COLORS.primary),
+        {
+          maxLabelLength: 18,
+          tooltipFormatter: (row) => buildTooltipHtml(row.rawLabel, [
+            `事件数：${formatNumber(row.item?.events || 0)}`,
+            `规则命中：${formatNumber(row.item?.ruleHits || 0)}`,
+            `可疑流量：${formatNumber(row.item?.suspiciousEvents || 0)}`,
+            `最近事件：${formatTime(row.item?.lastSeenAt, true)}`,
+          ]),
+        }
       );
     },
     healthStatusOption() {
@@ -1375,7 +1573,7 @@ createApp({
         { label: "Agent", value: this.selectedNode.agentVersion || "—", mono: true },
         { label: "策略包", value: this.selectedNode.bundleVersion || "—", mono: true },
         { label: "最近心跳", value: formatTime(this.selectedNode.lastSeenAt), mono: true },
-        { label: "事件数", value: formatNumber(this.selectedNodeReport?.events || this.selectedNodeEvents.length), mono: true },
+        { label: "事件数", value: formatNumber(this.selectedNodeReport?.events || 0), mono: true },
         { label: "命中规则", value: formatNumber(this.selectedNodeReport?.ruleHits || 0), mono: true },
       ];
     },
@@ -1408,8 +1606,89 @@ createApp({
         { label: "元数据项", value: formatNumber(Object.keys(this.selectedNode.metadata || {}).length), mono: true },
       ];
     },
+    selectedNodeTimeRangeText() {
+      const { since, until } = this.resolveSelectedNodeTimeRange();
+      return `${formatTime(since, true)} - ${formatTime(until, true)}`;
+    },
     selectedNodeTrafficOption() {
       return buildTrafficTrendOption(this.selectedNodeTrafficSeries);
+    },
+    selectedNodeTrafficHoverBucket() {
+      if (this.selectedNodeTrafficHoverIndex >= 0 && this.selectedNodeTrafficHoverIndex < this.selectedNodeTrafficSeries.length) {
+        return this.selectedNodeTrafficSeries[this.selectedNodeTrafficHoverIndex];
+      }
+      return this.selectedNodeTrafficSeries[this.selectedNodeTrafficSeries.length - 1] || null;
+    },
+    selectedNodeTrafficHoverTitle() {
+      return this.selectedNodeTrafficHoverIndex >= 0 ? "悬浮详情" : "最新时间点";
+    },
+    selectedNodeSourceIpOption() {
+      return buildHorizontalBarOption(
+        this.selectedNodeBreakdown.sourceIps || [],
+        (item) => item.value || "unknown",
+        (item) => item.events || 0,
+        (item) => (Number(item.suspiciousEvents || 0) > 0 ? CHART_COLORS.warning : CHART_COLORS.primary),
+        {
+          maxLabelLength: 18,
+          yAxisLabelWidth: 132,
+          tooltipFormatter: (row) => buildTooltipHtml(row.rawLabel, [
+            `事件数：${formatNumber(row.item?.events || 0)}`,
+            `可疑流量：${formatNumber(row.item?.suspiciousEvents || 0)}`,
+            `最近出现：${formatTime(row.item?.lastSeenAt, true)}`,
+          ]),
+        }
+      );
+    },
+    selectedNodeDestinationIpOption() {
+      return buildHorizontalBarOption(
+        this.selectedNodeBreakdown.destinationIps || [],
+        (item) => item.value || "unknown",
+        (item) => item.events || 0,
+        (item) => (Number(item.suspiciousEvents || 0) > 0 ? CHART_COLORS.warning : CHART_COLORS.secondary),
+        {
+          maxLabelLength: 18,
+          yAxisLabelWidth: 132,
+          tooltipFormatter: (row) => buildTooltipHtml(row.rawLabel, [
+            `事件数：${formatNumber(row.item?.events || 0)}`,
+            `可疑流量：${formatNumber(row.item?.suspiciousEvents || 0)}`,
+            `最近出现：${formatTime(row.item?.lastSeenAt, true)}`,
+          ]),
+        }
+      );
+    },
+    selectedNodeSniOption() {
+      return buildHorizontalBarOption(
+        this.selectedNodeBreakdown.snis || [],
+        (item) => item.value || "unknown",
+        (item) => item.events || 0,
+        (item) => (Number(item.suspiciousEvents || 0) > 0 ? CHART_COLORS.danger : CHART_COLORS.success),
+        {
+          maxLabelLength: 26,
+          yAxisLabelWidth: 168,
+          tooltipFormatter: (row) => buildTooltipHtml(row.rawLabel, [
+            `事件数：${formatNumber(row.item?.events || 0)}`,
+            `可疑流量：${formatNumber(row.item?.suspiciousEvents || 0)}`,
+            `最近出现：${formatTime(row.item?.lastSeenAt, true)}`,
+          ]),
+        }
+      );
+    },
+    selectedNodeProtocolBreakdownOption() {
+      return buildHorizontalBarOption(
+        this.selectedNodeBreakdown.protocols || [],
+        (item) => item.value || "unknown",
+        (item) => item.events || 0,
+        (item) => (Number(item.suspiciousEvents || 0) > 0 ? CHART_COLORS.danger : CHART_COLORS.secondary),
+        {
+          maxLabelLength: 16,
+          yAxisLabelWidth: 132,
+          tooltipFormatter: (row) => buildTooltipHtml(row.rawLabel, [
+            `事件数：${formatNumber(row.item?.events || 0)}`,
+            `可疑流量：${formatNumber(row.item?.suspiciousEvents || 0)}`,
+            `最近出现：${formatTime(row.item?.lastSeenAt, true)}`,
+          ]),
+        }
+      );
     },
     eventDetailPropsText() {
       if (!this.eventDetailEvent?.props) {
@@ -2007,6 +2286,112 @@ createApp({
       return date.toISOString();
     },
 
+    resolveSelectedNodeTimeRange(range = this.selectedNodeTimeRange) {
+      let values = Array.isArray(range) ? range.filter(Boolean).slice(0, 2) : [];
+      if (values.length < 2) {
+        values = defaultNodeTimeRange();
+      }
+      let since = this.normalizeDateFilter(values[0]);
+      let until = this.normalizeDateFilter(values[1]);
+      if (!since || !until) {
+        values = defaultNodeTimeRange();
+        since = this.normalizeDateFilter(values[0]);
+        until = this.normalizeDateFilter(values[1]);
+      }
+      const sinceMs = new Date(since).getTime();
+      const untilMs = new Date(until).getTime();
+      if (Number.isFinite(sinceMs) && Number.isFinite(untilMs) && sinceMs > untilMs) {
+        return {
+          since: new Date(untilMs).toISOString(),
+          until: new Date(sinceMs).toISOString(),
+        };
+      }
+      return { since, until };
+    },
+
+    selectedNodeTrafficSeriesLimit(since, until) {
+      const sinceMs = new Date(since).getTime();
+      const untilMs = new Date(until).getTime();
+      if (!Number.isFinite(sinceMs) || !Number.isFinite(untilMs)) {
+        return 1440;
+      }
+      return Math.max(1, Math.min(100000, Math.ceil((untilMs - sinceMs) / 60000) + 1));
+    },
+
+    resolveTrafficHoverIndex(buckets, payload) {
+      if (!Array.isArray(buckets) || !buckets.length || !payload) {
+        return -1;
+      }
+      let index = Number.isInteger(payload.dataIndex) ? payload.dataIndex : -1;
+      if (index < 0 && Number.isInteger(payload.dataIndexInside)) {
+        index = payload.dataIndexInside;
+      }
+      const axisInfo = Array.isArray(payload.axesInfo) ? payload.axesInfo[0] : null;
+      if (index < 0 && Number.isInteger(axisInfo?.value)) {
+        index = axisInfo.value;
+      }
+      if (index < 0 && axisInfo?.value !== undefined && axisInfo?.value !== null) {
+        const axisValue = String(axisInfo.value);
+        index = buckets.findIndex((bucket) => formatChartTime(bucket.timestamp) === axisValue);
+      }
+      if (index < 0 || index >= buckets.length) {
+        return -1;
+      }
+      return index;
+    },
+
+    handleTrafficSeriesHover(scope, payload) {
+      const buckets = scope === "overview" ? this.trafficSeries : this.selectedNodeTrafficSeries;
+      const index = this.resolveTrafficHoverIndex(buckets, payload);
+      if (index < 0) {
+        return;
+      }
+      if (scope === "overview") {
+        this.overviewTrafficHoverIndex = index;
+        return;
+      }
+      this.selectedNodeTrafficHoverIndex = index;
+    },
+
+    handleTrafficSeriesLeave(scope) {
+      if (scope === "overview") {
+        this.overviewTrafficHoverIndex = -1;
+        return;
+      }
+      this.selectedNodeTrafficHoverIndex = -1;
+    },
+
+    trafficHoverRows(bucket) {
+      if (!bucket) {
+        return [];
+      }
+      return [
+        { label: "时间", value: formatTime(bucket.timestamp, true), mono: true },
+        { label: "事件总量", value: formatNumber(bucket.events || 0), mono: true },
+        { label: "规则命中", value: formatNumber(bucket.ruleHits || 0), mono: true },
+        { label: "可疑流量", value: formatNumber(bucket.suspicious || 0), mono: true },
+      ];
+    },
+
+    async applySelectedNodeTimeRange() {
+      if (!Array.isArray(this.selectedNodeTimeRange) || this.selectedNodeTimeRange.length < 2 || !this.selectedNodeTimeRange[0] || !this.selectedNodeTimeRange[1]) {
+        ElementPlus.ElMessage.error("请选择开始和结束时间。");
+        return;
+      }
+      const { since, until } = this.resolveSelectedNodeTimeRange(this.selectedNodeTimeRange);
+      this.selectedNodeTimeRange = [new Date(since), new Date(until)];
+      if (this.selectedNode?.id) {
+        await this.selectNode(this.selectedNode.id);
+      }
+    },
+
+    async resetSelectedNodeTimeRange() {
+      this.selectedNodeTimeRange = defaultNodeTimeRange();
+      if (this.selectedNode?.id) {
+        await this.selectNode(this.selectedNode.id);
+      }
+    },
+
     escapeCsv(value) {
       const text = String(value ?? "");
       if (/[",\n]/.test(text)) {
@@ -2368,9 +2753,10 @@ createApp({
         if (this.selectedNode?.id === node.id) {
           this.selectedNode = null;
           this.selectedNodeTasks = [];
-          this.selectedNodeEvents = [];
           this.selectedNodeReport = null;
           this.selectedNodeTrafficSeries = [];
+          this.selectedNodeBreakdown = defaultEventBreakdown();
+          this.selectedNodeTrafficHoverIndex = -1;
           this.navigateToView("nodes");
         }
         if (this.nodeCommandTarget?.id === node.id) {
@@ -3203,6 +3589,9 @@ createApp({
     },
 
     openNodeDetail(nodeId) {
+      if (!this.isNodeDetailPage) {
+        this.selectedNodeTimeRange = defaultNodeTimeRange();
+      }
       this.activeView = "nodes";
       this.detailRoute = { type: "nodes", id: nodeId };
       const nextHash = this.buildHash();
@@ -3611,6 +4000,7 @@ createApp({
         this.rules = rules || [];
         this.protocols = protocols || [];
         this.trafficSeries = trafficSeries?.buckets || [];
+        this.overviewTrafficHoverIndex = -1;
         this.nodeStats = nodeStats || [];
       } finally {
         if (!background) {
@@ -3639,9 +4029,10 @@ createApp({
         if (!this.nodes.length && !this.isNodeDetailPage) {
           this.selectedNode = null;
           this.selectedNodeTasks = [];
-          this.selectedNodeEvents = [];
           this.selectedNodeReport = null;
           this.selectedNodeTrafficSeries = [];
+          this.selectedNodeBreakdown = defaultEventBreakdown();
+          this.selectedNodeTrafficHoverIndex = -1;
         }
       } finally {
         this.loading.nodes = false;
@@ -3659,11 +4050,6 @@ createApp({
       if (row?.id) {
         this.openNodeDetail(row.id);
       }
-    },
-
-    async loadSelectedNodeEvents(nodeId) {
-      const result = await requestJSON(`/api/v1/reports/events?agentId=${encodeURIComponent(nodeId)}&limit=20`);
-      this.selectedNodeEvents = result?.events || [];
     },
 
     async restoreNodeDefaultBundle() {
@@ -3693,12 +4079,6 @@ createApp({
         }
         ElementPlus.ElMessage.error(error.message || String(error));
       }
-    },
-
-    async loadSelectedNodeTrafficSeries(nodeId) {
-      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      const result = await requestJSON(`/api/v1/reports/series/traffic?agentId=${encodeURIComponent(nodeId)}&since=${encodeURIComponent(since)}&limit=120`);
-      this.selectedNodeTrafficSeries = result?.buckets || [];
     },
 
     async loadEventRows() {
@@ -3865,18 +4245,21 @@ createApp({
     },
 
     async selectNode(nodeId) {
-      const [node, tasks, events, nodeStats, trafficSeries] = await Promise.all([
+      const { since, until } = this.resolveSelectedNodeTimeRange();
+      const trafficLimit = this.selectedNodeTrafficSeriesLimit(since, until);
+      const [node, tasks, nodeStats, trafficSeries, breakdown] = await Promise.all([
         requestJSON(`/api/v1/nodes/${encodeURIComponent(nodeId)}`),
         requestJSON(`/api/v1/agents/${encodeURIComponent(nodeId)}/tasks?status=all&limit=20`),
-        requestJSON(`/api/v1/reports/events?agentId=${encodeURIComponent(nodeId)}&limit=20`),
         requestJSON("/api/v1/reports/nodes"),
-        requestJSON(`/api/v1/reports/series/traffic?agentId=${encodeURIComponent(nodeId)}&since=${encodeURIComponent(new Date(Date.now() - 60 * 60 * 1000).toISOString())}&limit=120`),
+        requestJSON(`/api/v1/reports/series/traffic?agentId=${encodeURIComponent(nodeId)}&since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&limit=${encodeURIComponent(trafficLimit)}`),
+        requestJSON(`/api/v1/reports/breakdown?agentId=${encodeURIComponent(nodeId)}&since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&limit=8`),
       ]);
       this.selectedNode = node;
       this.selectedNodeTasks = tasks?.tasks || [];
-      this.selectedNodeEvents = events?.events || [];
       this.selectedNodeReport = (nodeStats || []).find((item) => item.agentId === nodeId) || null;
       this.selectedNodeTrafficSeries = trafficSeries?.buckets || [];
+      this.selectedNodeTrafficHoverIndex = -1;
+      this.selectedNodeBreakdown = normalizeEventBreakdown(breakdown);
     },
 
     async loadBundles() {

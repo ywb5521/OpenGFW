@@ -38,6 +38,7 @@ type QueryStore interface {
 	QueryNodeStats(models.TimeRangeQuery) ([]models.NodeReportItem, error)
 	QueryMetrics(models.MetricQuery) (models.MetricQueryResult, error)
 	QueryTrafficSeries(models.TimeRangeQuery) (models.TimeSeriesResponse, error)
+	QueryEventBreakdown(models.TimeRangeQuery) (models.EventBreakdown, error)
 }
 
 func (s *Service) Summary() models.ReportSummary {
@@ -457,6 +458,50 @@ func (s *Service) TrafficSeries(query models.TimeRangeQuery) models.TimeSeriesRe
 	return models.TimeSeriesResponse{Buckets: buckets}
 }
 
+func (s *Service) EventBreakdown(query models.TimeRangeQuery) models.EventBreakdown {
+	if s.query != nil {
+		if result, err := s.query.QueryEventBreakdown(query); err == nil {
+			return result
+		}
+	}
+	snapshot := s.ingest.Snapshot()
+	bySource := make(map[string]*models.EventBreakdownItem)
+	byDestination := make(map[string]*models.EventBreakdownItem)
+	bySNI := make(map[string]*models.EventBreakdownItem)
+	byProtocol := make(map[string]*models.EventBreakdownItem)
+
+	for _, event := range snapshot.Events {
+		if !withinRange(event.Time, query.Since, query.Until) {
+			continue
+		}
+		if query.AgentID != "" && event.AgentID != query.AgentID {
+			continue
+		}
+		if src := strings.TrimSpace(event.SrcIP); src != "" {
+			addEventBreakdownItem(bySource, src, event)
+		}
+		if dst := strings.TrimSpace(event.DstIP); dst != "" {
+			addEventBreakdownItem(byDestination, dst, event)
+		}
+		if sni := extractEventSNI(event); sni != "" {
+			addEventBreakdownItem(bySNI, sni, event)
+		}
+		protocol := strings.TrimSpace(event.Proto)
+		if protocol == "" {
+			protocol = "unknown"
+		}
+		addEventBreakdownItem(byProtocol, protocol, event)
+	}
+
+	limit := normalizeLimit(query.Limit, 8)
+	return models.EventBreakdown{
+		SourceIPs:      rankEventBreakdownItems(bySource, limit),
+		DestinationIPs: rankEventBreakdownItems(byDestination, limit),
+		SNIs:           rankEventBreakdownItems(bySNI, limit),
+		Protocols:      rankEventBreakdownItems(byProtocol, limit),
+	}
+}
+
 func normalizeLimit(limit int, fallback int) int {
 	if limit <= 0 {
 		return fallback
@@ -495,4 +540,68 @@ func withinRange(ts time.Time, since, until time.Time) bool {
 		return false
 	}
 	return true
+}
+
+func addEventBreakdownItem(groups map[string]*models.EventBreakdownItem, key string, event models.TrafficEvent) {
+	if key == "" {
+		return
+	}
+	item, ok := groups[key]
+	if !ok {
+		item = &models.EventBreakdownItem{Value: key}
+		groups[key] = item
+	}
+	item.Events++
+	if isSuspiciousEvent(event) {
+		item.SuspiciousEvents++
+	}
+	if event.Time.After(item.LastSeenAt) {
+		item.LastSeenAt = event.Time
+	}
+}
+
+func rankEventBreakdownItems(groups map[string]*models.EventBreakdownItem, limit int) []models.EventBreakdownItem {
+	items := make([]models.EventBreakdownItem, 0, len(groups))
+	for _, item := range groups {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Events == items[j].Events {
+			return items[i].Value < items[j].Value
+		}
+		return items[i].Events > items[j].Events
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func extractEventSNI(event models.TrafficEvent) string {
+	if sni := extractNestedString(event.Props, "tls", "req", "sni"); sni != "" {
+		return sni
+	}
+	return extractNestedString(event.Props, "quic", "req", "sni")
+}
+
+func extractNestedString(root map[string]any, keys ...string) string {
+	if len(root) == 0 || len(keys) == 0 {
+		return ""
+	}
+	var current any = root
+	for _, key := range keys {
+		nextMap, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current, ok = nextMap[key]
+		if !ok {
+			return ""
+		}
+	}
+	value, ok := current.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }

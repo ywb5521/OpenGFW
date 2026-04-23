@@ -28,8 +28,30 @@ func TestReportAggregations(t *testing.T) {
 	ing.IngestEvents(models.EventBatch{
 		AgentID: "agent-1",
 		Events: []models.TrafficEvent{
-			{Type: "rule_hit", RuleName: "block-ads", Proto: "tcp", Time: now},
-			{Type: "suspicious_flow", RuleName: "block-ads", Proto: "tcp", Suspicion: 80, Time: now.Add(time.Second)},
+			{
+				Type:     "rule_hit",
+				RuleName: "block-ads",
+				Proto:    "tcp",
+				SrcIP:    "10.0.0.1",
+				DstIP:    "1.1.1.1",
+				Props: map[string]any{
+					"tls": map[string]any{
+						"req": map[string]any{
+							"sni": "api.example.com",
+						},
+					},
+				},
+				Time: now,
+			},
+			{
+				Type:      "suspicious_flow",
+				RuleName:  "block-ads",
+				Proto:     "tcp",
+				SrcIP:     "10.0.0.1",
+				DstIP:     "1.1.1.1",
+				Suspicion: 80,
+				Time:      now.Add(time.Second),
+			},
 		},
 	})
 	ing.IngestEvents(models.EventBatch{
@@ -88,5 +110,19 @@ func TestReportAggregations(t *testing.T) {
 	metrics := svc.Metrics(models.MetricQuery{Name: "rule_hits_total", Limit: 10})
 	if metrics.Total != 1 || len(metrics.Metrics) != 1 {
 		t.Fatalf("expected 1 metric row, got total=%d len=%d", metrics.Total, len(metrics.Metrics))
+	}
+
+	breakdown := svc.EventBreakdown(models.TimeRangeQuery{AgentID: "agent-1", Limit: 5})
+	if len(breakdown.SourceIPs) != 1 || breakdown.SourceIPs[0].Value != "10.0.0.1" || breakdown.SourceIPs[0].Events != 2 {
+		t.Fatalf("unexpected source ip breakdown: %+v", breakdown.SourceIPs)
+	}
+	if len(breakdown.DestinationIPs) != 1 || breakdown.DestinationIPs[0].Value != "1.1.1.1" || breakdown.DestinationIPs[0].Events != 2 {
+		t.Fatalf("unexpected destination ip breakdown: %+v", breakdown.DestinationIPs)
+	}
+	if len(breakdown.SNIs) != 1 || breakdown.SNIs[0].Value != "api.example.com" || breakdown.SNIs[0].Events != 1 {
+		t.Fatalf("unexpected sni breakdown: %+v", breakdown.SNIs)
+	}
+	if len(breakdown.Protocols) != 1 || breakdown.Protocols[0].Value != "tcp" || breakdown.Protocols[0].Events != 2 {
+		t.Fatalf("unexpected protocol breakdown: %+v", breakdown.Protocols)
 	}
 }

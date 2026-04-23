@@ -82,6 +82,7 @@ func NewServer(logger *zap.Logger, nodes *node.Service, policies *policy.Service
 	mux.Handle("/api/v1/reports/rules", srv.adminOnly(http.HandlerFunc(srv.handleReportRules)))
 	mux.Handle("/api/v1/reports/protocols", srv.adminOnly(http.HandlerFunc(srv.handleReportProtocols)))
 	mux.Handle("/api/v1/reports/nodes", srv.adminOnly(http.HandlerFunc(srv.handleReportNodes)))
+	mux.Handle("/api/v1/reports/breakdown", srv.adminOnly(http.HandlerFunc(srv.handleReportBreakdown)))
 	mux.Handle("/api/v1/reports/metrics", srv.adminOnly(http.HandlerFunc(srv.handleReportMetrics)))
 	mux.Handle("/api/v1/reports/series/traffic", srv.adminOnly(http.HandlerFunc(srv.handleReportTrafficSeries)))
 	mux.Handle("/api/v1/reports/summary", srv.adminOnly(http.HandlerFunc(srv.handleSummary)))
@@ -1116,6 +1117,19 @@ func (s *Server) handleReportNodes(w http.ResponseWriter, r *http.Request) {
 	transport.WriteJSON(w, http.StatusOK, s.reports.Nodes(models.TimeRangeQuery{
 		Since: parseTimeQuery(r, "since"),
 		Until: parseTimeQuery(r, "until"),
+	}))
+}
+
+func (s *Server) handleReportBreakdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		transport.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	transport.WriteJSON(w, http.StatusOK, s.reports.EventBreakdown(models.TimeRangeQuery{
+		AgentID: r.URL.Query().Get("agentId"),
+		Since:   parseTimeQuery(r, "since"),
+		Until:   parseTimeQuery(r, "until"),
+		Limit:   parseIntQuery(r, "limit"),
 	}))
 }
 

@@ -172,11 +172,23 @@
                       <h3 class="panel-title">最近一小时事件趋势</h3>
                     </div>
                   </div>
+                  <div v-if="overviewTrafficHoverBucket" class="chart-hover-strip">
+                    <div class="chart-hover-title">{{ overviewTrafficHoverTitle }}</div>
+                    <div class="chart-hover-values">
+                      <div v-for="item in trafficHoverRows(overviewTrafficHoverBucket)" :key="'overview-' + item.label" class="chart-hover-chip">
+                        <span class="chart-hover-label">{{ item.label }}</span>
+                        <span class="chart-hover-value" :class="{ mono: item.mono }">{{ item.value }}</span>
+                      </div>
+                    </div>
+                  </div>
                   <chart-panel
                     :option="trafficTrendOption"
                     :empty="!trafficSeries.length"
                     empty-text="暂无时序数据"
                     :height="340"
+                    @chart-hover="handleTrafficSeriesHover('overview', $event)"
+                    @chart-axis-pointer="handleTrafficSeriesHover('overview', $event)"
+                    @chart-leave="handleTrafficSeriesLeave('overview')"
                   ></chart-panel>
                 </el-card>
 
@@ -469,17 +481,49 @@
                         </el-card>
 
                         <el-card class="panel-card" shadow="never">
-                          <div class="panel-head">
+                          <div class="panel-head panel-head--aligned">
                             <div>
                               <div class="panel-kicker">Traffic Trend</div>
-                              <h3 class="panel-title">节点最近一小时事件趋势</h3>
+                              <h3 class="panel-title">节点事件趋势</h3>
+                              <div class="detail-page-subtle mono">{{ selectedNodeTimeRangeText }}</div>
+                            </div>
+                            <el-form class="toolbar-form detail-toolbar-form" :inline="true">
+                              <el-form-item label="统计区间">
+                                <el-date-picker
+                                  v-model="selectedNodeTimeRange"
+                                  type="datetimerange"
+                                  range-separator="至"
+                                  start-placeholder="开始时间"
+                                  end-placeholder="结束时间"
+                                  :clearable="false"
+                                  unlink-panels
+                                ></el-date-picker>
+                              </el-form-item>
+                              <el-form-item>
+                                <el-button plain @click="applySelectedNodeTimeRange">应用</el-button>
+                              </el-form-item>
+                              <el-form-item>
+                                <el-button plain @click="resetSelectedNodeTimeRange">当天</el-button>
+                              </el-form-item>
+                            </el-form>
+                          </div>
+                          <div v-if="selectedNodeTrafficHoverBucket" class="chart-hover-strip">
+                            <div class="chart-hover-title">{{ selectedNodeTrafficHoverTitle }}</div>
+                            <div class="chart-hover-values">
+                              <div v-for="item in trafficHoverRows(selectedNodeTrafficHoverBucket)" :key="'node-' + item.label" class="chart-hover-chip">
+                                <span class="chart-hover-label">{{ item.label }}</span>
+                                <span class="chart-hover-value" :class="{ mono: item.mono }">{{ item.value }}</span>
+                              </div>
                             </div>
                           </div>
                           <chart-panel
                             :option="selectedNodeTrafficOption"
                             :empty="!selectedNodeTrafficSeries.length"
-                            empty-text="该节点暂无时序数据"
+                            empty-text="当前区间暂无时序数据"
                             :height="280"
+                            @chart-hover="handleTrafficSeriesHover('nodes', $event)"
+                            @chart-axis-pointer="handleTrafficSeriesHover('nodes', $event)"
+                            @chart-leave="handleTrafficSeriesLeave('nodes')"
                           ></chart-panel>
                         </el-card>
 
@@ -511,48 +555,63 @@
                         <el-card class="panel-card" shadow="never">
                           <div class="panel-head">
                             <div>
-                              <div class="panel-kicker">Traffic Events</div>
-                              <h3 class="panel-title">最近上报事件</h3>
+                              <div class="panel-kicker">Traffic Breakdown</div>
+                              <h3 class="panel-title">当前区间分组统计</h3>
                             </div>
                           </div>
-                          <el-table :data="selectedNodeEvents" stripe empty-text="该节点暂无事件">
-                            <el-table-column label="时间" min-width="170">
-                              <template #default="scope">
-                                <span class="mono">{{ formatTime(scope.row.time) }}</span>
-                              </template>
-                            </el-table-column>
-                            <el-table-column label="流信息" min-width="260">
-                              <template #default="scope">
-                                <span class="mono">
-                                  {{ (scope.row.srcIp || "—") + ":" + (scope.row.srcPort || "—") + " → " + (scope.row.dstIp || "—") + ":" + (scope.row.dstPort || "—") }}
-                                </span>
-                              </template>
-                            </el-table-column>
-                            <el-table-column label="类型" min-width="130">
-                              <template #default="scope">{{ translateEventType(scope.row.type) }}</template>
-                            </el-table-column>
-                            <el-table-column label="协议 / 动作" min-width="150">
-                              <template #default="scope">
-                                <span class="mono">{{ (scope.row.proto || "—") + " / " + (scope.row.action || "—") }}</span>
-                              </template>
-                            </el-table-column>
-                            <el-table-column label="摘要" min-width="240">
-                              <template #default="scope">
-                                <span>{{ eventPropsSummary(scope.row) }}</span>
-                              </template>
-                            </el-table-column>
-                            <el-table-column label="规则 / 可疑度" min-width="180">
-                              <template #default="scope">
-                                <span>{{ scope.row.ruleName || "—" }}</span>
-                                <span class="entity-subtle mono"> · {{ scope.row.suspicion || 0 }}</span>
-                              </template>
-                            </el-table-column>
-                            <el-table-column label="详情" width="100" align="right">
-                              <template #default="scope">
-                                <el-button link type="primary" @click="openEventDetail(scope.row)">查看</el-button>
-                              </template>
-                            </el-table-column>
-                          </el-table>
+                          <div class="detail-chart-grid">
+                            <section class="detail-mini-chart">
+                              <div class="detail-mini-chart-head">
+                                <div class="detail-mini-chart-title">来源 IP</div>
+                                <div class="detail-mini-chart-subtle">按节点源地址聚合</div>
+                              </div>
+                              <chart-panel
+                                :option="selectedNodeSourceIpOption"
+                                :empty="!selectedNodeBreakdown.sourceIps.length"
+                                empty-text="当前区间暂无来源 IP 数据"
+                                :height="220"
+                              ></chart-panel>
+                            </section>
+
+                            <section class="detail-mini-chart">
+                              <div class="detail-mini-chart-head">
+                                <div class="detail-mini-chart-title">目标 IP</div>
+                                <div class="detail-mini-chart-subtle">按节点目的地址聚合</div>
+                              </div>
+                              <chart-panel
+                                :option="selectedNodeDestinationIpOption"
+                                :empty="!selectedNodeBreakdown.destinationIps.length"
+                                empty-text="当前区间暂无目标 IP 数据"
+                                :height="220"
+                              ></chart-panel>
+                            </section>
+
+                            <section class="detail-mini-chart">
+                              <div class="detail-mini-chart-head">
+                                <div class="detail-mini-chart-title">SNI</div>
+                                <div class="detail-mini-chart-subtle">聚合 TLS / QUIC SNI</div>
+                              </div>
+                              <chart-panel
+                                :option="selectedNodeSniOption"
+                                :empty="!selectedNodeBreakdown.snis.length"
+                                empty-text="当前区间暂无 SNI 数据"
+                                :height="220"
+                              ></chart-panel>
+                            </section>
+
+                            <section class="detail-mini-chart">
+                              <div class="detail-mini-chart-head">
+                                <div class="detail-mini-chart-title">协议</div>
+                                <div class="detail-mini-chart-subtle">按协议事件量聚合</div>
+                              </div>
+                              <chart-panel
+                                :option="selectedNodeProtocolBreakdownOption"
+                                :empty="!selectedNodeBreakdown.protocols.length"
+                                empty-text="当前区间暂无协议数据"
+                                :height="220"
+                              ></chart-panel>
+                            </section>
+                          </div>
                         </el-card>
 
                       </div>

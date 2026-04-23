@@ -142,3 +142,17 @@ type TimeSeriesBucket struct {
 type TimeSeriesResponse struct {
 	Buckets []TimeSeriesBucket `json:"buckets"`
 }
+
+type EventBreakdownItem struct {
+	Value            string    `json:"value"`
+	Events           int       `json:"events"`
+	SuspiciousEvents int       `json:"suspiciousEvents,omitempty"`
+	LastSeenAt       time.Time `json:"lastSeenAt,omitempty"`
+}
+
+type EventBreakdown struct {
+	SourceIPs      []EventBreakdownItem `json:"sourceIps"`
+	DestinationIPs []EventBreakdownItem `json:"destinationIps"`
+	SNIs           []EventBreakdownItem `json:"snis"`
+	Protocols      []EventBreakdownItem `json:"protocols"`
+}
