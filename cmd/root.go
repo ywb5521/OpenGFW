@@ -8,13 +8,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/apernet/OpenGFW/analyzer"
-	"github.com/apernet/OpenGFW/analyzer/tcp"
-	"github.com/apernet/OpenGFW/analyzer/udp"
 	"github.com/apernet/OpenGFW/engine"
 	"github.com/apernet/OpenGFW/io"
-	"github.com/apernet/OpenGFW/modifier"
-	modUDP "github.com/apernet/OpenGFW/modifier/udp"
+	"github.com/apernet/OpenGFW/pkg/opengfw"
 	"github.com/apernet/OpenGFW/ruleset"
 
 	"github.com/spf13/cobra"
@@ -80,25 +76,6 @@ var logFormatMap = map[string]zapcore.EncoderConfig{
 		EncodeTime:     zapcore.EpochMillisTimeEncoder,
 		EncodeDuration: zapcore.SecondsDurationEncoder,
 	},
-}
-
-// Analyzers & modifiers
-
-var analyzers = []analyzer.Analyzer{
-	&tcp.FETAnalyzer{},
-	&tcp.HTTPAnalyzer{},
-	&tcp.SocksAnalyzer{},
-	&tcp.SSHAnalyzer{},
-	&tcp.TLSAnalyzer{},
-	&tcp.TrojanAnalyzer{},
-	&udp.DNSAnalyzer{},
-	&udp.OpenVPNAnalyzer{},
-	&udp.QUICAnalyzer{},
-	&udp.WireGuardAnalyzer{},
-}
-
-var modifiers = []modifier.Modifier{
-	&modUDP.DNSModifier{},
 }
 
 func Execute() {
@@ -260,7 +237,12 @@ func runMain(cmd *cobra.Command, args []string) {
 		GeoIpFilename:        config.Ruleset.GeoIp,
 		ProtectedDialContext: engineConfig.IO.ProtectedDialContext,
 	}
-	rs, err := ruleset.CompileExprRules(rawRs, analyzers, modifiers, rsConfig)
+	rs, err := opengfw.CompileExprRules(rawRs, opengfw.CompileOptions{
+		Logger:               rsConfig.Logger,
+		GeoSiteFilename:      rsConfig.GeoSiteFilename,
+		GeoIPFilename:        rsConfig.GeoIpFilename,
+		ProtectedDialContext: rsConfig.ProtectedDialContext,
+	})
 	if err != nil {
 		logger.Fatal("failed to compile rules", zap.Error(err))
 	}
@@ -294,7 +276,12 @@ func runMain(cmd *cobra.Command, args []string) {
 				logger.Error("failed to load rules, using old rules", zap.Error(err))
 				continue
 			}
-			rs, err := ruleset.CompileExprRules(rawRs, analyzers, modifiers, rsConfig)
+			rs, err := opengfw.CompileExprRules(rawRs, opengfw.CompileOptions{
+				Logger:               rsConfig.Logger,
+				GeoSiteFilename:      rsConfig.GeoSiteFilename,
+				GeoIPFilename:        rsConfig.GeoIpFilename,
+				ProtectedDialContext: rsConfig.ProtectedDialContext,
+			})
 			if err != nil {
 				logger.Error("failed to compile rules, using old rules", zap.Error(err))
 				continue

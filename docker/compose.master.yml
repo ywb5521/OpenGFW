@@ -1,0 +1,20 @@
+services:
+  opengfw-master:
+    image: ${OPENGFW_IMAGE_NAME:-opengfw-master:latest}
+    build:
+      context: ..
+      dockerfile: docker/master/Dockerfile
+    restart: unless-stopped
+    environment:
+      OPENGFW_DATABASE_URL: ${OPENGFW_DATABASE_URL:?OPENGFW_DATABASE_URL is required}
+      OPENGFW_MASTER_LISTEN: :${OPENGFW_CONTAINER_PORT:-9527}
+      OPENGFW_EVENT_RETENTION: ${OPENGFW_EVENT_RETENTION:-}
+      OPENGFW_METRIC_RETENTION: ${OPENGFW_METRIC_RETENTION:-}
+      OPENGFW_RETENTION_INTERVAL: ${OPENGFW_RETENTION_INTERVAL:-}
+    ports:
+      - "${OPENGFW_PUBLISH_PORT:-9527}:${OPENGFW_CONTAINER_PORT:-9527}"
+    volumes:
+      - opengfw-master-data:/var/lib/opengfw-master
+
+volumes:
+  opengfw-master-data:

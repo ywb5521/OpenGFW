@@ -1,0 +1,2379 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenGFW 运维主控台</title>
+    <meta
+      name="description"
+      content="OpenGFW 统一运维主控台，集中查看节点状态、策略包、发布版本与流量事件。"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.11.5/dist/index.css" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="app" v-cloak>
+      <section v-if="booting" class="boot-shell">
+        <div class="boot-panel">
+          <div class="boot-mark"></div>
+          <div class="boot-kicker">OpenGFW Operations Console</div>
+          <h1 class="boot-title">主控台正在启动</h1>
+        </div>
+      </section>
+
+      <section v-else-if="!auth.authenticated" class="auth-shell">
+        <div class="auth-layout">
+          <article class="auth-card">
+            <div class="panel-head panel-head--stacked">
+              <div>
+                <div class="panel-kicker">Access</div>
+                <h2 class="panel-title">{{ auth.setupRequired ? '初始化管理员' : '管理员登录' }}</h2>
+              </div>
+            </div>
+
+            <el-alert
+              v-if="authError"
+              class="inline-alert"
+              :closable="false"
+              show-icon
+              type="error"
+              :title="authError"
+            ></el-alert>
+
+            <el-form v-if="auth.setupRequired" class="auth-form" label-position="top" :model="setupForm">
+                <el-form-item label="管理员账号">
+                  <el-input v-model="setupForm.username" placeholder="例如：admin"></el-input>
+                </el-form-item>
+                <el-form-item label="管理员密码">
+                  <el-input
+                    v-model="setupForm.password"
+                    type="password"
+                    show-password
+                    placeholder="至少 8 位"
+                  ></el-input>
+                </el-form-item>
+                <el-form-item label="确认密码">
+                  <el-input
+                    v-model="setupForm.confirmPassword"
+                    type="password"
+                    show-password
+                    placeholder="再次输入密码"
+                  ></el-input>
+                </el-form-item>
+                <el-button class="full-width" type="primary" :loading="authSubmitting" @click="submitSetup">
+                  初始化并进入主控台
+                </el-button>
+            </el-form>
+
+            <el-form v-else class="auth-form" label-position="top" :model="loginForm">
+                <el-form-item label="管理员账号">
+                  <el-input v-model="loginForm.username" autocomplete="username" placeholder="请输入账号"></el-input>
+                </el-form-item>
+                <el-form-item label="管理员密码">
+                  <el-input
+                    v-model="loginForm.password"
+                    type="password"
+                    show-password
+                    autocomplete="current-password"
+                    placeholder="请输入密码"
+                  ></el-input>
+                </el-form-item>
+                <el-button class="full-width" type="primary" :loading="authSubmitting" @click="submitLogin">
+                  登录主控台
+                </el-button>
+            </el-form>
+          </article>
+        </div>
+      </section>
+
+      <div v-else class="app-shell">
+        <aside class="rail">
+          <div class="brand-block">
+            <div class="brand-kicker">OpenGFW</div>
+            <h1 class="brand-title">运维主控台</h1>
+          </div>
+
+            <el-menu class="rail-menu" :default-active="activeView" @select="handleMenuSelect">
+              <el-menu-item index="overview">总览</el-menu-item>
+              <el-menu-item index="nodes">节点</el-menu-item>
+              <el-menu-item index="policies">策略</el-menu-item>
+              <el-menu-item index="releases">发布</el-menu-item>
+              <el-menu-item index="events">事件</el-menu-item>
+            </el-menu>
+
+          <div class="rail-footer">
+            <div class="footer-section">
+              <div class="footer-label">控制面状态</div>
+              <div class="footer-value">{{ statusText }}</div>
+            </div>
+            <div class="footer-section">
+              <div class="footer-label">最近同步</div>
+              <div class="footer-value mono">{{ lastSyncLabel }}</div>
+            </div>
+            <div class="footer-section">
+              <div class="footer-label">当前时间</div>
+              <div class="footer-value mono">{{ clockLabel }}</div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="workspace">
+          <header class="topbar">
+            <div class="topbar-copy">
+              <div class="topbar-kicker">Operations Desk</div>
+              <h2 class="topbar-title">{{ currentViewTitle }}</h2>
+            </div>
+            <div class="topbar-actions">
+              <el-tag :type="statusTagType" effect="light" round>{{ statusText }}</el-tag>
+              <el-button plain :loading="isRefreshing" @click="refreshAll()">刷新</el-button>
+              <el-button type="primary" @click="accountDialogVisible = true">账号设置</el-button>
+            </div>
+          </header>
+
+          <main class="view-stack">
+            <section v-show="activeView === 'overview'" class="view-stack overview-view">
+              <div class="overview-lead">
+                <article class="overview-hero">
+                  <div class="hero-badges">
+                    <span class="hero-badge">在线率 {{ onlineRate }}%</span>
+                    <span class="hero-badge">风险占比 {{ suspiciousRate }}%</span>
+                    <span class="hero-badge">活跃协议 {{ protocolCount }}</span>
+                  </div>
+
+                  <div class="overview-meta-grid">
+                    <article v-for="item in overviewFocusItems" :key="item.label" class="overview-meta-card">
+                      <div class="overview-meta-label">{{ item.label }}</div>
+                      <div class="overview-meta-value">{{ item.value }}</div>
+                      <div class="overview-meta-subtle">{{ item.subtle }}</div>
+                    </article>
+                  </div>
+                </article>
+
+                <div class="overview-metric-grid">
+                  <article v-for="metric in overviewCards" :key="metric.label" class="metric-card overview-metric-card">
+                    <div class="metric-label">{{ metric.label }}</div>
+                    <div class="metric-value">{{ metric.value }}</div>
+                    <div class="metric-subtle">{{ metric.subtle }}</div>
+                  </article>
+                </div>
+              </div>
+
+              <div class="content-grid overview-content-grid">
+                <el-card class="panel-card panel-card--featured span-8" shadow="never" v-loading="loading.overview">
+                  <div class="panel-head">
+                    <div>
+                      <div class="panel-kicker">Traffic Trend</div>
+                      <h3 class="panel-title">最近一小时事件趋势</h3>
+                    </div>
+                  </div>
+                  <chart-panel
+                    :option="trafficTrendOption"
+                    :empty="!trafficSeries.length"
+                    empty-text="暂无时序数据"
+                    :height="340"
+                  ></chart-panel>
+                </el-card>
+
+                <el-card class="panel-card span-4" shadow="never" v-loading="loading.overview">
+                  <div class="panel-head">
+                    <div>
+                      <div class="panel-kicker">Event Mix</div>
+                      <h3 class="panel-title">事件类型占比</h3>
+                    </div>
+                  </div>
+                  <chart-panel
+                    :option="eventTypeOption"
+                    :empty="!eventTypeEntries.length"
+                    empty-text="暂无事件类型数据"
+                    :height="340"
+                  ></chart-panel>
+                </el-card>
+
+                <el-card class="panel-card span-4" shadow="never" v-loading="loading.overview">
+                  <div class="panel-head">
+                    <div>
+                      <div class="panel-kicker">Policy Effect</div>
+                      <h3 class="panel-title">规则命中排行</h3>
+                    </div>
+                  </div>
+                  <chart-panel
+                    :option="ruleHitsOption"
+                    :empty="!rules.length"
+                    empty-text="暂无规则命中数据"
+                    :height="280"
+                  ></chart-panel>
+                </el-card>
+
+                <el-card class="panel-card span-4" shadow="never" v-loading="loading.overview">
+                  <div class="panel-head">
+                    <div>
+                      <div class="panel-kicker">Protocols</div>
+                      <h3 class="panel-title">协议事件分布</h3>
+                    </div>
+                  </div>
+                  <chart-panel
+                    :option="protocolOption"
+                    :empty="!protocols.length"
+                    empty-text="暂无协议数据"
+                    :height="280"
+                  ></chart-panel>
+                </el-card>
+
+                <el-card class="panel-card span-4" shadow="never" v-loading="loading.overview">
+                  <div class="panel-head">
+                    <div>
+                      <div class="panel-kicker">System Health</div>
+                      <h3 class="panel-title">节点在线率</h3>
+                    </div>
+                  </div>
+                  <chart-panel
+                    :option="healthStatusOption"
+                    :empty="!summary.nodes && !summary.eventCount"
+                    empty-text="暂无健康度数据"
+                    :height="280"
+                  ></chart-panel>
+                </el-card>
+
+                <el-card class="panel-card span-6" shadow="never" v-loading="loading.overview">
+                  <div class="panel-head">
+                    <div>
+                      <div class="panel-kicker">Node Ranking</div>
+                      <h3 class="panel-title">节点事件量排行</h3>
+                    </div>
+                  </div>
+                  <chart-panel
+                    :option="nodeVolumeOption"
+                    :empty="!nodeStats.length"
+                    empty-text="暂无节点排行数据"
+                    :height="300"
+                  ></chart-panel>
+                </el-card>
+
+                <el-card class="panel-card span-12" shadow="never" v-loading="loading.overview">
+                  <div class="panel-head">
+                    <div>
+                      <div class="panel-kicker">Suspicious Events</div>
+                      <h3 class="panel-title">高信号可疑流量</h3>
+                    </div>
+                  </div>
+                  <el-table :data="suspiciousEvents" stripe height="320" empty-text="暂无可疑流量">
+                    <el-table-column label="时间" min-width="170">
+                      <template #default="scope">
+                        <span class="mono">{{ formatTime(scope.row.time) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="agentId" label="节点" min-width="160"></el-table-column>
+                    <el-table-column prop="proto" label="协议" min-width="110"></el-table-column>
+                    <el-table-column label="评分" min-width="100">
+                      <template #default="scope">{{ formatNumber(scope.row.suspicion || 0) }}</template>
+                    </el-table-column>
+                    <el-table-column prop="ruleName" label="规则" min-width="220"></el-table-column>
+                    <el-table-column label="动作" min-width="110">
+                      <template #default="scope">{{ translateAction(scope.row.action) }}</template>
+                    </el-table-column>
+                  </el-table>
+                </el-card>
+              </div>
+            </section>
+
+            <section v-show="activeView === 'nodes'" class="view-stack">
+              <template v-if="!isNodeDetailPage">
+                <div class="metric-grid node-metric-grid">
+                  <article v-for="card in nodeOverviewCards" :key="card.label" class="metric-card metric-card--compact">
+                    <div class="metric-label">{{ card.label }}</div>
+                    <div class="metric-value">{{ card.value }}</div>
+                    <div class="metric-subtle">{{ card.subtle }}</div>
+                  </article>
+                </div>
+
+                <el-card class="panel-card" shadow="never">
+                  <div class="panel-head panel-head--aligned">
+                    <div>
+                      <div class="panel-kicker">Asset Inventory</div>
+                      <h3 class="panel-title">节点清单</h3>
+                    </div>
+                    <el-form class="toolbar-form" :inline="true">
+                      <el-form-item label="状态">
+                        <el-select v-model="filters.nodes.status" placeholder="全部状态" clearable>
+                          <el-option label="在线" value="online"></el-option>
+                          <el-option label="待安装" value="pending"></el-option>
+                          <el-option label="离线" value="offline"></el-option>
+                          <el-option label="异常" value="error"></el-option>
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="标签">
+                        <el-input
+                          v-model="filters.nodes.label"
+                          clearable
+                          placeholder="例如：edge"
+                          @keyup.enter="loadNodes"
+                        ></el-input>
+                      </el-form-item>
+                      <el-form-item label="搜索">
+                        <el-input
+                          v-model="filters.nodes.search"
+                          clearable
+                          placeholder="节点 ID / 主机名 / 版本"
+                          @keyup.enter="loadNodes"
+                        ></el-input>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button plain @click="loadNodes">应用</el-button>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button plain @click="resetNodeFilters">重置</el-button>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button type="primary" plain @click="openNodeInstallDialog">添加节点</el-button>
+                      </el-form-item>
+                    </el-form>
+                  </div>
+
+                  <el-table
+                    class="interactive-table"
+                    :data="nodes"
+                    stripe
+                    highlight-current-row
+                    row-key="id"
+                    height="560"
+                    empty-text="当前筛选条件下没有节点"
+                    @row-click="handleNodeRowClick"
+                  >
+                    <el-table-column label="节点" min-width="260">
+                      <template #default="scope">
+                        <div class="entity-cell">
+                          <div class="entity-main">{{ scope.row.name || scope.row.id }}</div>
+                          <div class="entity-subtle mono">{{ scope.row.id }}</div>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="状态" min-width="120">
+                      <template #default="scope">
+                        <el-tag :type="statusTone(scope.row.status)" effect="light" round>
+                          {{ translateStatus(scope.row.status) }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="主机 / 管理 IP" min-width="220">
+                      <template #default="scope">
+                        <div class="entity-cell">
+                          <div class="entity-main">{{ scope.row.hostname || "—" }}</div>
+                          <div class="entity-subtle mono">{{ scope.row.managementIp || "—" }}</div>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="版本" min-width="180">
+                      <template #default="scope">
+                        <div class="stack-meta">
+                          <div class="stack-meta-main mono">{{ scope.row.agentVersion || "—" }}</div>
+                          <div class="stack-meta-subtle mono">Bundle {{ scope.row.bundleVersion || "—" }}</div>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="标签" min-width="180">
+                      <template #default="scope">
+                        <div class="chip-stack">
+                          <el-tag
+                            v-for="label in (scope.row.labels || []).slice(0, 2)"
+                            :key="scope.row.id + label"
+                            size="small"
+                            effect="plain"
+                          >
+                            {{ label }}
+                          </el-tag>
+                          <span v-if="!(scope.row.labels || []).length" class="entity-subtle">—</span>
+                          <span v-else-if="(scope.row.labels || []).length > 2" class="entity-subtle">
+                            +{{ (scope.row.labels || []).length - 2 }}
+                          </span>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="最近心跳" min-width="180">
+                      <template #default="scope">
+                        <span class="mono">{{ formatTime(scope.row.lastSeenAt) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="220" align="right">
+                      <template #default="scope">
+                        <el-button link type="primary" @click.stop="openNodeDetail(scope.row.id)">查看</el-button>
+                        <el-button link type="primary" @click.stop="openNodeCommandDialog(scope.row)">命令</el-button>
+                        <el-button link type="danger" @click.stop="deleteNode(scope.row)">删除</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </el-card>
+              </template>
+
+              <template v-else>
+                <div class="detail-page">
+                  <div class="detail-page-head">
+                    <div class="detail-page-title-group">
+                      <div class="panel-kicker">Node Detail</div>
+                      <h3 class="detail-page-title">{{ selectedNode ? (selectedNode.name || selectedNode.id) : "节点详情" }}</h3>
+                      <div v-if="selectedNode" class="detail-page-subtle mono">{{ selectedNode.id }}</div>
+                    </div>
+                    <div class="detail-page-actions">
+                      <el-tag v-if="selectedNode" :type="statusTone(selectedNode.status)" effect="light" round>
+                        {{ translateStatus(selectedNode.status) }}
+                      </el-tag>
+                      <el-button
+                        v-if="selectedNode"
+                        plain
+                        :disabled="selectedNodeUsingDefaultBundle"
+                        @click="restoreNodeDefaultBundle"
+                      >
+                        恢复默认策略
+                      </el-button>
+                      <el-button plain @click="navigateToView('nodes')">返回节点列表</el-button>
+                    </div>
+                  </div>
+
+                  <template v-if="selectedNode">
+                    <div class="detail-summary-grid">
+                      <div v-for="item in selectedNodeHighlights" :key="item.label" class="detail-stat-card">
+                        <div class="detail-stat-label">{{ item.label }}</div>
+                        <div class="detail-stat-value" :class="{ mono: item.mono }">{{ item.value }}</div>
+                      </div>
+                    </div>
+
+                    <div class="detail-page-grid">
+                      <div class="detail-page-main">
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Node Profile</div>
+                              <h3 class="panel-title">节点信息</h3>
+                            </div>
+                          </div>
+                          <el-descriptions :column="1" border size="small" class="detail-descriptions">
+                            <el-descriptions-item v-for="item in selectedNodeDetails" :key="item.label" :label="item.label">
+                              <span :class="{ mono: item.mono }">{{ item.value }}</span>
+                            </el-descriptions-item>
+                          </el-descriptions>
+
+                          <div v-if="selectedNodeMetadataEntries.length" class="detail-section">
+                            <div class="detail-title-line">元数据</div>
+                            <div class="kv-list">
+                              <div v-for="entry in selectedNodeMetadataEntries" :key="entry.key" class="kv-row">
+                                <span class="kv-key mono">{{ entry.key }}</span>
+                                <span class="kv-value">{{ entry.value }}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </el-card>
+
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Traffic Trend</div>
+                              <h3 class="panel-title">节点最近一小时事件趋势</h3>
+                            </div>
+                          </div>
+                          <chart-panel
+                            :option="selectedNodeTrafficOption"
+                            :empty="!selectedNodeTrafficSeries.length"
+                            empty-text="该节点暂无时序数据"
+                            :height="280"
+                          ></chart-panel>
+                        </el-card>
+
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Task Timeline</div>
+                              <h3 class="panel-title">最近任务</h3>
+                            </div>
+                          </div>
+                          <template v-if="selectedNodeTasks.length">
+                            <div class="task-timeline-wrap task-timeline-wrap--page">
+                              <el-timeline>
+                                <el-timeline-item
+                                  v-for="task in selectedNodeTasks"
+                                  :key="task.id"
+                                  :type="statusTone(task.status)"
+                                  :timestamp="formatTime(task.createdAt)"
+                                >
+                                  <div class="timeline-title mono">{{ task.id }}</div>
+                                  <div class="timeline-copy">{{ translateTaskType(task.type) }} · {{ translateStatus(task.status) }}</div>
+                                </el-timeline-item>
+                              </el-timeline>
+                            </div>
+                          </template>
+                          <el-empty v-else description="该节点暂无任务"></el-empty>
+                        </el-card>
+
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Traffic Events</div>
+                              <h3 class="panel-title">最近上报事件</h3>
+                            </div>
+                          </div>
+                          <el-table :data="selectedNodeEvents" stripe empty-text="该节点暂无事件">
+                            <el-table-column label="时间" min-width="170">
+                              <template #default="scope">
+                                <span class="mono">{{ formatTime(scope.row.time) }}</span>
+                              </template>
+                            </el-table-column>
+                            <el-table-column label="流信息" min-width="260">
+                              <template #default="scope">
+                                <span class="mono">
+                                  {{ (scope.row.srcIp || "—") + ":" + (scope.row.srcPort || "—") + " → " + (scope.row.dstIp || "—") + ":" + (scope.row.dstPort || "—") }}
+                                </span>
+                              </template>
+                            </el-table-column>
+                            <el-table-column label="类型" min-width="130">
+                              <template #default="scope">{{ translateEventType(scope.row.type) }}</template>
+                            </el-table-column>
+                            <el-table-column label="协议 / 动作" min-width="150">
+                              <template #default="scope">
+                                <span class="mono">{{ (scope.row.proto || "—") + " / " + (scope.row.action || "—") }}</span>
+                              </template>
+                            </el-table-column>
+                            <el-table-column label="摘要" min-width="240">
+                              <template #default="scope">
+                                <span>{{ eventPropsSummary(scope.row) }}</span>
+                              </template>
+                            </el-table-column>
+                            <el-table-column label="规则 / 可疑度" min-width="180">
+                              <template #default="scope">
+                                <span>{{ scope.row.ruleName || "—" }}</span>
+                                <span class="entity-subtle mono"> · {{ scope.row.suspicion || 0 }}</span>
+                              </template>
+                            </el-table-column>
+                            <el-table-column label="详情" width="100" align="right">
+                              <template #default="scope">
+                                <el-button link type="primary" @click="openEventDetail(scope.row)">查看</el-button>
+                              </template>
+                            </el-table-column>
+                          </el-table>
+                        </el-card>
+
+                      </div>
+
+                      <div class="detail-page-side">
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Node Context</div>
+                              <h3 class="panel-title">标签与能力</h3>
+                            </div>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">标签</div>
+                            <div class="chip-stack">
+                              <el-tag v-for="label in selectedNodeLabelTags" :key="label" size="small" effect="plain">
+                                {{ label }}
+                              </el-tag>
+                              <span v-if="!selectedNodeLabelTags.length" class="entity-subtle">—</span>
+                            </div>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">能力</div>
+                            <div class="chip-stack">
+                              <el-tag v-for="capability in selectedNodeCapabilityTags" :key="capability" size="small" effect="plain">
+                                {{ capability }}
+                              </el-tag>
+                              <span v-if="!selectedNodeCapabilityTags.length" class="entity-subtle">—</span>
+                            </div>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">上报统计</div>
+                            <div class="kv-list">
+                              <div class="kv-row">
+                                <span class="kv-key mono">事件总数</span>
+                                <span class="kv-value">{{ formatNumber(selectedNodeReport?.events || 0) }}</span>
+                              </div>
+                              <div class="kv-row">
+                                <span class="kv-key mono">规则命中</span>
+                                <span class="kv-value">{{ formatNumber(selectedNodeReport?.ruleHits || 0) }}</span>
+                              </div>
+                              <div class="kv-row">
+                                <span class="kv-key mono">可疑流量</span>
+                                <span class="kv-value">{{ formatNumber(selectedNodeReport?.suspiciousEvents || 0) }}</span>
+                              </div>
+                              <div class="kv-row">
+                                <span class="kv-key mono">最近事件</span>
+                                <span class="kv-value mono">{{ formatTime(selectedNodeReport?.lastSeenAt || selectedNode?.lastSeenAt) }}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </el-card>
+                      </div>
+                    </div>
+                  </template>
+                  <el-empty v-else description="未找到节点详情"></el-empty>
+                </div>
+              </template>
+            </section>
+
+            <section v-show="activeView === 'policies'" class="view-stack">
+              <template v-if="!isPolicyDetailPage">
+                <div class="metric-grid data-metric-grid">
+                  <article v-for="card in policyOverviewCards" :key="card.label" class="metric-card metric-card--compact">
+                    <div class="metric-label">{{ card.label }}</div>
+                    <div class="metric-value">{{ card.value }}</div>
+                    <div class="metric-subtle">{{ card.subtle }}</div>
+                  </article>
+                </div>
+
+                <el-card class="panel-card" shadow="never">
+                  <div class="panel-head panel-head--aligned">
+                    <div>
+                      <div class="panel-kicker">Configuration</div>
+                      <h3 class="panel-title">策略包</h3>
+                    </div>
+                    <el-form class="toolbar-form" :inline="true">
+                      <el-form-item label="搜索">
+                        <el-input
+                          v-model="filters.bundles.search"
+                          clearable
+                          placeholder="策略版本 / agent 版本"
+                          @keyup.enter="loadBundles"
+                        ></el-input>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button plain @click="loadBundles">应用</el-button>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button type="primary" plain @click="startNewBundle">新建策略包</el-button>
+                      </el-form-item>
+                    </el-form>
+                  </div>
+
+                  <el-table
+                    class="interactive-table"
+                    :data="bundles"
+                    stripe
+                    highlight-current-row
+                    row-key="version"
+                    height="520"
+                    empty-text="暂无策略包"
+                    @row-click="handleBundleRowClick"
+                  >
+                    <el-table-column prop="version" label="版本" min-width="200">
+                      <template #default="scope">
+                        <div class="entity-cell">
+                          <div class="entity-main" :class="{ mono: !isReadonlyBundle(scope.row) }">{{ bundleDisplayName(scope.row) }}</div>
+                          <div class="entity-subtle mono">{{ scope.row.version }}</div>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="agentVersion" label="Agent 版本" min-width="150"></el-table-column>
+                    <el-table-column label="规则数" min-width="110">
+                      <template #default="scope">{{ formatNumber((scope.row.rules || []).length) }}</template>
+                    </el-table-column>
+                    <el-table-column label="分析器数" min-width="110">
+                      <template #default="scope">{{ formatNumber(((scope.row.telemetry || {}).analyzers || []).length) }}</template>
+                    </el-table-column>
+                    <el-table-column label="创建时间" min-width="180">
+                      <template #default="scope">
+                        <span class="mono">{{ formatTime(scope.row.createdAt) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="详情" width="100" align="right">
+                      <template #default="scope">
+                        <el-button link type="primary" @click.stop="openBundleDetail(scope.row.version)">查看</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </el-card>
+              </template>
+
+              <template v-else>
+                <div class="detail-page">
+                  <div class="detail-page-head">
+                    <div class="detail-page-title-group">
+                      <div class="panel-kicker">Bundle Detail</div>
+                      <h3 class="detail-page-title">{{ isNewBundleDraft ? "新建策略包" : bundleDisplayName(selectedBundle) }}</h3>
+                      <div v-if="selectedBundle" class="detail-page-subtle mono">
+                        {{ isNewBundleDraft ? "未保存草稿" : (selectedBundle.readonly ? "系统自动分配并作为所有策略下发的保底上报配置" : ("Agent " + (selectedBundle.agentVersion || "—"))) }}
+                      </div>
+                    </div>
+                    <div class="detail-page-actions">
+                      <el-button type="primary" plain @click="startNewBundle">新建策略包</el-button>
+                      <el-button plain @click="navigateToView('policies')">返回策略列表</el-button>
+                    </div>
+                  </div>
+
+                  <template v-if="selectedBundle">
+                    <div class="detail-summary-grid">
+                      <div v-for="item in selectedBundleHighlights" :key="item.label" class="detail-stat-card">
+                        <div class="detail-stat-label">{{ item.label }}</div>
+                        <div class="detail-stat-value" :class="{ mono: item.mono }">{{ item.value }}</div>
+                      </div>
+                    </div>
+
+                    <div class="detail-page-grid detail-page-grid--editor" v-if="bundleDraft">
+                      <div class="detail-page-main">
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Bundle Editor</div>
+                              <h3 class="panel-title">基础信息与运行时</h3>
+                            </div>
+                          </div>
+                          <template v-if="selectedBundleReadonly">
+                            <div class="validation-item validation-item--success">
+                              系统默认上报策略由主控自动分配，不允许直接修改；所有自定义策略下发时都会保底叠加这份配置。
+                            </div>
+                            <div class="kv-list">
+                              <div v-for="row in bundleRuntimeSummaryRows(bundleDraft)" :key="row.label" class="kv-row">
+                                <span class="kv-key mono">{{ row.label }}</span>
+                                <span class="kv-value" :class="{ mono: row.mono }">{{ row.value }}</span>
+                              </div>
+                            </div>
+                          </template>
+                          <template v-else>
+                            <div class="editor-grid">
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">策略版本</span>
+                                  <el-tooltip :content="policyFieldHelp('bundle_version')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input v-model="bundleDraft.version" placeholder="例如：bundle-v2"></el-input>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">Agent 版本</span>
+                                  <el-tooltip :content="policyFieldHelp('agent_version')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input v-model="bundleDraft.agentVersion" placeholder="例如：0.1.0"></el-input>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">IO Queue Size</span>
+                                  <el-tooltip :content="policyFieldHelp('io_queue_size')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input-number v-model="bundleDraft.runtime.io.queueSize" :min="0" :step="1"></el-input-number>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">Workers</span>
+                                  <el-tooltip :content="policyFieldHelp('worker_count')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input-number v-model="bundleDraft.runtime.workers.count" :min="0" :step="1"></el-input-number>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">Recv Buffer</span>
+                                  <el-tooltip :content="policyFieldHelp('rcv_buf')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input-number v-model="bundleDraft.runtime.io.rcvBuf" :step="128"></el-input-number>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">Send Buffer</span>
+                                  <el-tooltip :content="policyFieldHelp('snd_buf')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input-number v-model="bundleDraft.runtime.io.sndBuf" :step="128"></el-input-number>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">Worker Queue</span>
+                                  <el-tooltip :content="policyFieldHelp('worker_queue')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input-number v-model="bundleDraft.runtime.workers.queueSize" :min="0" :step="1"></el-input-number>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">UDP Max Streams</span>
+                                  <el-tooltip :content="policyFieldHelp('udp_max_streams')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input-number v-model="bundleDraft.runtime.workers.udpMaxStreams" :min="0" :step="1"></el-input-number>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">TCP Total Pages</span>
+                                  <el-tooltip :content="policyFieldHelp('tcp_total_pages')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input-number v-model="bundleDraft.runtime.workers.tcpMaxBufferedPagesTotal" :min="0" :step="1"></el-input-number>
+                              </label>
+                              <label class="editor-field">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">TCP Pages / Conn</span>
+                                  <el-tooltip :content="policyFieldHelp('tcp_pages_per_conn')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-input-number v-model="bundleDraft.runtime.workers.tcpMaxBufferedPagesPerConn" :min="0" :step="1"></el-input-number>
+                              </label>
+                              <label class="editor-field editor-field--switch">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">本地模式</span>
+                                  <el-tooltip :content="policyFieldHelp('io_local')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-switch v-model="bundleDraft.runtime.io.local"></el-switch>
+                              </label>
+                              <label class="editor-field editor-field--switch">
+                                <span class="editor-label-row">
+                                  <span class="editor-label">RST</span>
+                                  <el-tooltip :content="policyFieldHelp('io_rst')" placement="top" effect="light">
+                                    <span class="field-help-dot" tabindex="0">i</span>
+                                  </el-tooltip>
+                                </span>
+                                <el-switch v-model="bundleDraft.runtime.io.rst"></el-switch>
+                              </label>
+                            </div>
+
+                            <div class="detail-section">
+                              <div class="detail-title-line">
+                                Runtime Extra
+                                <el-tooltip :content="policyFieldHelp('runtime_extra')" placement="top" effect="light">
+                                  <span class="field-help-dot" tabindex="0">i</span>
+                                </el-tooltip>
+                              </div>
+                              <div class="kv-editor-list">
+                                <div v-for="(row, index) in bundleDraft.runtime.extraRows" :key="'extra-' + index" class="kv-editor-row">
+                                  <el-input v-model="row.key" placeholder="key"></el-input>
+                                  <el-input v-model="row.value" placeholder="value"></el-input>
+                                  <el-button text type="danger" @click="removeBundleMetadataRow(index, 'runtimeExtra')">删除</el-button>
+                                </div>
+                              </div>
+                              <el-button plain @click="addBundleMetadataRow('runtimeExtra')">新增 Extra</el-button>
+                            </div>
+                          </template>
+                        </el-card>
+
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">{{ selectedBundleReadonly ? "Telemetry" : "Reporting Guard" }}</div>
+                              <h3 class="panel-title">{{ selectedBundleReadonly ? "默认上报配置" : "默认上报说明" }}</h3>
+                            </div>
+                          </div>
+                          <template v-if="selectedBundleReadonly">
+                            <div class="kv-list">
+                              <div v-for="row in bundleTelemetrySummaryRows(bundleDraft)" :key="row.label" class="kv-row">
+                                <span class="kv-key mono">{{ row.label }}</span>
+                                <span class="kv-value" :class="{ mono: row.mono }">{{ row.value }}</span>
+                              </div>
+                            </div>
+                          </template>
+                          <template v-else>
+                            <div class="validation-item validation-item--success">
+                              系统默认上报策略会自动保底叠加到所有节点和自定义策略上，这里无需单独配置遥测开关或分析器。
+                            </div>
+                          </template>
+                        </el-card>
+
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head panel-head--aligned">
+                            <div>
+                              <div class="panel-kicker">Rules</div>
+                              <h3 class="panel-title">规则编辑</h3>
+                            </div>
+                            <el-button v-if="!selectedBundleReadonly" type="primary" plain @click="addBundleRule">新增规则</el-button>
+                          </div>
+
+                          <template v-if="selectedBundleReadonly">
+                            <div class="validation-item validation-item--success">
+                              系统默认上报策略只负责保底上报能力，不承载业务规则，也不支持直接编辑。
+                            </div>
+                          </template>
+                          <template v-else>
+                          <div class="wizard-shell">
+                            <div class="wizard-head">
+                              <div>
+                                <div class="panel-kicker">Rule Wizard</div>
+                                <h4 class="wizard-title">表达式向导</h4>
+                              </div>
+                              <div class="inline-button-row">
+                                <el-button plain @click="resetRuleWizard">重置向导</el-button>
+                              </div>
+                            </div>
+
+                            <div class="wizard-steps">
+                              <button
+                                v-for="(step, index) in ruleWizardSteps"
+                                :key="step.key"
+                                type="button"
+                                class="wizard-step"
+                                :class="{
+                                  'is-active': ruleWizardStep === index,
+                                  'is-complete': ruleWizardStep > index
+                                }"
+                                @click="setRuleWizardStep(index)"
+                              >
+                                <span class="wizard-step-index">{{ index + 1 }}</span>
+                                <span class="wizard-step-copy">
+                                  <span class="wizard-step-label">{{ step.label }}</span>
+                                  <span class="wizard-step-title">{{ step.title }}</span>
+                                </span>
+                              </button>
+                            </div>
+
+                            <div class="wizard-stage">
+                              <template v-if="ruleWizardStep === 0">
+                                <div class="wizard-grid wizard-grid--scenario">
+                                  <button
+                                    v-for="item in ruleWizardScenarios"
+                                    :key="item.value"
+                                    type="button"
+                                    class="wizard-card wizard-card--selectable"
+                                    :class="{ 'is-selected': ruleWizard.scenario === item.value }"
+                                    @click="ruleWizard.scenario = item.value"
+                                  >
+                                    <span class="wizard-preview-name">{{ item.label }}</span>
+                                    <span class="editor-help">{{ item.description }}</span>
+                                  </button>
+                                </div>
+                              </template>
+
+                              <template v-else-if="ruleWizardStep === 1">
+                                <div class="editor-grid">
+                                  <label class="editor-field">
+                                    <span class="editor-label">规则名称</span>
+                                    <el-input v-model="ruleWizard.name" placeholder="例如：block-ads-by-sni"></el-input>
+                                  </label>
+
+                                  <label v-if="['tls_sni', 'http_host', 'dns_qname'].includes(ruleWizard.scenario)" class="editor-field editor-field--span">
+                                    <span class="editor-label">域名</span>
+                                    <el-input v-model="ruleWizard.domain" placeholder="例如：ads.example.com"></el-input>
+                                  </label>
+
+                                  <label v-if="ruleWizard.scenario === 'geosite_sni'" class="editor-field editor-field--span">
+                                    <span class="editor-label">GeoSite 列表</span>
+                                    <el-input v-model="ruleWizard.geosite" placeholder="例如：category-ads-all"></el-input>
+                                  </label>
+
+                                  <label v-if="ruleWizard.scenario === 'cidr_ip'" class="editor-field">
+                                    <span class="editor-label">CIDR</span>
+                                    <el-input v-model="ruleWizard.cidr" placeholder='例如：192.168.0.0/16'></el-input>
+                                  </label>
+                                  <label v-if="ruleWizard.scenario === 'cidr_ip'" class="editor-field">
+                                    <span class="editor-label">匹配方向</span>
+                                    <el-select v-model="ruleWizard.cidrSide">
+                                      <el-option label="源或目的" value="either"></el-option>
+                                      <el-option label="仅源地址" value="src"></el-option>
+                                      <el-option label="仅目的地址" value="dst"></el-option>
+                                    </el-select>
+                                  </label>
+                                </div>
+
+                                <div class="wizard-grid">
+                                  <div class="wizard-card">
+                                    <div class="editor-label">场景说明</div>
+                                    <div class="editor-help">{{ currentRuleWizardMeta?.description || "—" }}</div>
+                                  </div>
+                                </div>
+                              </template>
+
+                              <template v-else-if="ruleWizardStep === 2">
+                                <div class="editor-grid">
+                                  <label class="editor-field">
+                                    <span class="editor-label">动作</span>
+                                    <el-select v-model="ruleWizard.action">
+                                      <el-option label="仅日志" value=""></el-option>
+                                      <el-option label="allow" value="allow"></el-option>
+                                      <el-option label="block" value="block"></el-option>
+                                      <el-option label="drop" value="drop"></el-option>
+                                      <el-option label="modify" value="modify"></el-option>
+                                    </el-select>
+                                  </label>
+                                  <label class="editor-field editor-field--switch">
+                                    <span class="editor-label">记录日志</span>
+                                    <el-switch v-model="ruleWizard.log"></el-switch>
+                                  </label>
+
+                                  <label v-if="ruleWizard.scenario === 'dns_qname' && ruleWizard.action === 'modify'" class="editor-field">
+                                    <span class="editor-label">A 记录</span>
+                                    <el-input v-model="ruleWizard.rewriteIPv4" placeholder="例如：127.0.0.1"></el-input>
+                                  </label>
+                                  <label v-if="ruleWizard.scenario === 'dns_qname' && ruleWizard.action === 'modify'" class="editor-field">
+                                    <span class="editor-label">AAAA 记录</span>
+                                    <el-input v-model="ruleWizard.rewriteIPv6" placeholder='例如：::1'></el-input>
+                                  </label>
+                                </div>
+
+                                <div class="wizard-grid">
+                                  <div class="wizard-card">
+                                    <div class="editor-label">动作说明</div>
+                                    <div class="editor-help">{{ describeRuleAction(ruleWizard.action) }}</div>
+                                  </div>
+                                </div>
+                              </template>
+
+                              <template v-else>
+                                <div class="wizard-grid">
+                                  <div class="wizard-card">
+                                    <div class="editor-label">生成预览</div>
+                                    <div v-if="ruleWizardPreview" class="wizard-preview">
+                                      <div class="wizard-preview-name">{{ ruleWizardPreview.name || "未命名规则" }}</div>
+                                      <div class="wizard-preview-meta mono">
+                                        {{ ruleWizardPreview.action || "log-only" }} · {{ ruleWizardPreview.log ? "log" : "silent" }}
+                                      </div>
+                                      <div class="wizard-preview-expr mono">{{ ruleWizardPreview.expr }}</div>
+                                    </div>
+                                  </div>
+                                  <div class="wizard-card">
+                                    <div class="editor-label">校验结果</div>
+                                    <div v-if="ruleWizardIssues.length" class="validation-list validation-list--compact">
+                                      <div v-for="issue in ruleWizardIssues" :key="issue" class="validation-item validation-item--error">
+                                        {{ issue }}
+                                      </div>
+                                    </div>
+                                    <div v-else class="validation-item validation-item--success">当前规则可加入列表。</div>
+                                  </div>
+                                </div>
+                              </template>
+                            </div>
+
+                            <div v-if="ruleWizardStepIssues.length && ruleWizardStep < ruleWizardSteps.length - 1" class="validation-list">
+                              <div v-for="issue in ruleWizardStepIssues" :key="issue" class="validation-item validation-item--error">
+                                {{ issue }}
+                              </div>
+                            </div>
+
+                            <div class="wizard-footer">
+                              <el-button plain :disabled="ruleWizardStep === 0" @click="prevRuleWizardStep">上一步</el-button>
+                              <el-button
+                                v-if="ruleWizardStep < ruleWizardSteps.length - 1"
+                                type="primary"
+                                :disabled="!canAdvanceRuleWizardStep"
+                                @click="nextRuleWizardStep"
+                              >
+                                下一步
+                              </el-button>
+                              <el-button
+                                v-else
+                                type="primary"
+                                :disabled="ruleWizardIssues.length > 0"
+                                @click="applyRuleWizard"
+                              >
+                                加入规则列表
+                              </el-button>
+                            </div>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">快速模板</div>
+                            <div class="template-chip-row">
+                              <button
+                                v-for="template in ruleTemplates"
+                                :key="template.key"
+                                class="template-chip"
+                                type="button"
+                                @click="applyBundleRuleTemplate(template)"
+                              >
+                                <span class="template-chip-label">{{ template.label }}</span>
+                                <span class="template-chip-copy">{{ template.description }}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div class="rule-editor-list">
+                            <article v-for="(rule, index) in bundleDraft.rules" :key="index" class="rule-editor-card">
+                              <div class="rule-editor-head">
+                                <div class="rule-editor-title">
+                                  <span class="rule-editor-index mono">#{{ index + 1 }}</span>
+                                  <span>{{ rule.name || "未命名规则" }}</span>
+                                </div>
+                                <div class="inline-button-row">
+                                  <el-button text @click="moveBundleRule(index, -1)" :disabled="index === 0">上移</el-button>
+                                  <el-button text @click="moveBundleRule(index, 1)" :disabled="index === bundleDraft.rules.length - 1">下移</el-button>
+                                  <el-button text @click="duplicateBundleRule(index)">复制</el-button>
+                                  <el-button text type="danger" @click="removeBundleRule(index)">删除</el-button>
+                                </div>
+                              </div>
+
+                              <div class="editor-grid">
+                                <label class="editor-field">
+                                  <span class="editor-label-row">
+                                    <span class="editor-label">名称</span>
+                                    <el-tooltip :content="policyFieldHelp('rule_name')" placement="top" effect="light">
+                                      <span class="field-help-dot" tabindex="0">i</span>
+                                    </el-tooltip>
+                                  </span>
+                                  <el-input v-model="rule.name" placeholder="rule name"></el-input>
+                                </label>
+                                <label class="editor-field">
+                                  <span class="editor-label-row">
+                                    <span class="editor-label">动作</span>
+                                    <el-tooltip :content="policyFieldHelp('rule_action')" placement="top" effect="light">
+                                      <span class="field-help-dot" tabindex="0">i</span>
+                                    </el-tooltip>
+                                  </span>
+                                  <el-select v-model="rule.action">
+                                    <el-option label="仅日志" value=""></el-option>
+                                    <el-option label="allow" value="allow"></el-option>
+                                    <el-option label="block" value="block"></el-option>
+                                    <el-option label="drop" value="drop"></el-option>
+                                    <el-option label="modify" value="modify"></el-option>
+                                  </el-select>
+                                </label>
+                                <label class="editor-field editor-field--switch">
+                                  <span class="editor-label-row">
+                                    <span class="editor-label">记录日志</span>
+                                    <el-tooltip :content="policyFieldHelp('rule_log')" placement="top" effect="light">
+                                      <span class="field-help-dot" tabindex="0">i</span>
+                                    </el-tooltip>
+                                  </span>
+                                  <el-switch v-model="rule.log"></el-switch>
+                                </label>
+                                <label class="editor-field">
+                                  <span class="editor-label-row">
+                                    <span class="editor-label">Modifier</span>
+                                    <el-tooltip :content="policyFieldHelp('rule_modifier')" placement="top" effect="light">
+                                      <span class="field-help-dot" tabindex="0">i</span>
+                                    </el-tooltip>
+                                  </span>
+                                  <el-select v-model="rule.modifierName" clearable placeholder="可选">
+                                    <el-option label="dns" value="dns"></el-option>
+                                  </el-select>
+                                </label>
+                                <label class="editor-field editor-field--span">
+                                  <span class="editor-label-row">
+                                    <span class="editor-label">表达式</span>
+                                    <el-tooltip :content="policyFieldHelp('rule_expr')" placement="top" effect="light">
+                                      <span class="field-help-dot" tabindex="0">i</span>
+                                    </el-tooltip>
+                                  </span>
+                                  <el-input v-model="rule.expr" type="textarea" :rows="3" placeholder="例如：true"></el-input>
+                                </label>
+                                <template v-if="rule.action === 'modify' && rule.modifierName === 'dns'">
+                                  <label class="editor-field">
+                                    <span class="editor-label-row">
+                                      <span class="editor-label">A 记录</span>
+                                      <el-tooltip :content="policyFieldHelp('rule_modifier_dns_a')" placement="top" effect="light">
+                                        <span class="field-help-dot" tabindex="0">i</span>
+                                      </el-tooltip>
+                                    </span>
+                                    <el-input v-model="rule.modifierDnsA" placeholder="例如：127.0.0.1"></el-input>
+                                  </label>
+                                  <label class="editor-field">
+                                    <span class="editor-label-row">
+                                      <span class="editor-label">AAAA 记录</span>
+                                      <el-tooltip :content="policyFieldHelp('rule_modifier_dns_aaaa')" placement="top" effect="light">
+                                        <span class="field-help-dot" tabindex="0">i</span>
+                                      </el-tooltip>
+                                    </span>
+                                    <el-input v-model="rule.modifierDnsAAAA" placeholder='例如：::1'></el-input>
+                                  </label>
+                                </template>
+                                <label v-else class="editor-field editor-field--span">
+                                  <span class="editor-label-row">
+                                    <span class="editor-label">Modifier Args (JSON)</span>
+                                    <el-tooltip :content="policyFieldHelp('rule_modifier_args')" placement="top" effect="light">
+                                      <span class="field-help-dot" tabindex="0">i</span>
+                                    </el-tooltip>
+                                  </span>
+                                  <el-input v-model="rule.modifierArgsText" type="textarea" :rows="4" placeholder='例如：{"ttl":300}'></el-input>
+                                </label>
+                              </div>
+
+                              <div class="rule-helper-grid">
+                                <div class="rule-helper-card">
+                                  <div class="editor-label">动作说明</div>
+                                  <div class="editor-help">{{ describeRuleAction(rule.action) }}</div>
+                                </div>
+                                <div class="rule-helper-card">
+                                  <div class="editor-label">表达式片段</div>
+                                  <div class="chip-stack">
+                                    <el-button
+                                      v-for="snippet in ruleExprSnippets"
+                                      :key="snippet.label"
+                                      text
+                                      @click="appendRuleExpr(index, snippet.expr)"
+                                    >
+                                      {{ snippet.label }}
+                                    </el-button>
+                                  </div>
+                                </div>
+                                <div class="rule-helper-card">
+                                  <div class="editor-label">即时检查</div>
+                                  <div v-if="getRuleValidationIssues(rule, index).length" class="validation-list validation-list--compact">
+                                    <div
+                                      v-for="issue in getRuleValidationIssues(rule, index)"
+                                      :key="issue"
+                                      class="validation-item validation-item--error"
+                                    >
+                                      {{ issue }}
+                                    </div>
+                                  </div>
+                                  <div v-else class="validation-item validation-item--success">
+                                    当前规则结构有效。
+                                  </div>
+                                </div>
+                                <div class="rule-helper-card">
+                                  <div class="editor-label">依赖分析器</div>
+                                  <div class="chip-stack">
+                                    <span
+                                      v-for="name in getRuleAnalyzerDependencies(rule)"
+                                      :key="name"
+                                      class="hint-chip mono"
+                                    >
+                                      {{ name }}
+                                    </span>
+                                    <span v-if="!getRuleAnalyzerDependencies(rule).length" class="entity-subtle">
+                                      仅基础字段
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </article>
+                          </div>
+                          </template>
+                        </el-card>
+                      </div>
+
+                      <div class="detail-page-side">
+                        <template v-if="selectedBundleReadonly">
+                          <el-card class="panel-card" shadow="never">
+                            <div class="panel-head">
+                              <div>
+                                <div class="panel-kicker">System Bundle</div>
+                                <h3 class="panel-title">只读说明</h3>
+                              </div>
+                            </div>
+
+                            <div class="detail-section">
+                              <div class="editor-help">
+                                这份策略由系统自动创建并在新增节点时默认下发，用于保证基础事件上报、流摘要和默认分析器始终生效。
+                              </div>
+                            </div>
+
+                            <div class="detail-section">
+                              <div class="detail-title-line">
+                                JSON 预览
+                                <el-tooltip :content="policyFieldHelp('preview')" placement="top" effect="light">
+                                  <span class="field-help-dot" tabindex="0">i</span>
+                                </el-tooltip>
+                              </div>
+                              <pre class="code-block code-block--preview">{{ bundleDraftPreview }}</pre>
+                            </div>
+                          </el-card>
+                        </template>
+                        <template v-else>
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head panel-head--aligned">
+                            <div>
+                              <div class="panel-kicker">Save Bundle</div>
+                              <h3 class="panel-title">保存与预览</h3>
+                            </div>
+                            <el-button plain @click="resetBundleDraft">重置</el-button>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="editor-help">
+                              修改版本号可以另存为新策略包；保持版本号不变则更新当前版本。
+                            </div>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">
+                              保存前校验
+                              <el-tooltip :content="policyFieldHelp('validation')" placement="top" effect="light">
+                                <span class="field-help-dot" tabindex="0">i</span>
+                              </el-tooltip>
+                            </div>
+                            <div v-if="bundleDraftValidationIssues.length" class="validation-list">
+                              <div v-for="issue in bundleDraftValidationIssues" :key="issue" class="validation-item validation-item--error">
+                                {{ issue }}
+                              </div>
+                            </div>
+                            <div v-else class="validation-item validation-item--success">
+                              当前策略包结构校验通过，可以保存。
+                            </div>
+                          </div>
+
+                          <el-alert
+                            v-if="bundleSaveError"
+                            class="inline-alert"
+                            :closable="false"
+                            show-icon
+                            type="error"
+                            :title="bundleSaveError"
+                          ></el-alert>
+                          <el-alert
+                            v-if="bundleSaveSuccess"
+                            class="inline-alert"
+                            :closable="false"
+                            show-icon
+                            type="success"
+                            :title="bundleSaveSuccess"
+                          ></el-alert>
+
+                          <div class="save-panel-actions">
+                            <el-button
+                              type="primary"
+                              :loading="bundleSaving"
+                              :disabled="bundleDraftValidationIssues.length > 0"
+                              @click="saveBundleDraft"
+                            >
+                              保存策略包
+                            </el-button>
+                            <el-button plain @click="resetBundleDraft">恢复原始</el-button>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">
+                              元数据
+                              <el-tooltip :content="policyFieldHelp('metadata')" placement="top" effect="light">
+                                <span class="field-help-dot" tabindex="0">i</span>
+                              </el-tooltip>
+                            </div>
+                            <div class="kv-editor-list">
+                              <div v-for="(row, index) in bundleDraft.metadataRows" :key="'meta-' + index" class="kv-editor-row">
+                                <el-input v-model="row.key" placeholder="key"></el-input>
+                                <el-input v-model="row.value" placeholder="value"></el-input>
+                                <el-button text type="danger" @click="removeBundleMetadataRow(index)">删除</el-button>
+                              </div>
+                            </div>
+                            <el-button plain @click="addBundleMetadataRow()">新增元数据</el-button>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">常用字段</div>
+                            <div class="hint-chip-row">
+                              <span v-for="hint in ruleFieldHints" :key="hint" class="hint-chip mono">{{ hint }}</span>
+                            </div>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">
+                              JSON 预览
+                              <el-tooltip :content="policyFieldHelp('preview')" placement="top" effect="light">
+                                <span class="field-help-dot" tabindex="0">i</span>
+                              </el-tooltip>
+                            </div>
+                            <pre class="code-block code-block--preview">{{ bundleDraftPreview }}</pre>
+                          </div>
+                        </el-card>
+
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head panel-head--aligned">
+                            <div>
+                              <div class="panel-kicker">Rollout</div>
+                              <h3 class="panel-title">发布到节点</h3>
+                            </div>
+                            <div class="inline-button-row">
+                              <el-button plain @click="loadRolloutNodes">刷新节点</el-button>
+                              <el-button plain @click="selectOnlineRolloutNodes">全选在线</el-button>
+                              <el-button plain @click="clearRolloutSelection">清空</el-button>
+                            </div>
+                          </div>
+
+                          <el-alert
+                            v-if="bundleRolloutError"
+                            class="inline-alert"
+                            :closable="false"
+                            show-icon
+                            type="error"
+                            :title="bundleRolloutError"
+                          ></el-alert>
+                          <el-alert
+                            v-if="bundleRolloutSuccess"
+                            class="inline-alert"
+                            :closable="false"
+                            show-icon
+                            type="success"
+                            :title="bundleRolloutSuccess"
+                          ></el-alert>
+
+                          <div class="metric-grid rollout-metric-grid">
+                            <article v-for="card in rolloutSummaryCards" :key="card.label" class="metric-card metric-card--compact metric-card--tiny">
+                              <div class="metric-label">{{ card.label }}</div>
+                              <div class="metric-value">{{ card.value }}</div>
+                              <div class="metric-subtle">{{ card.subtle }}</div>
+                            </article>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">目标节点</div>
+                            <el-select
+                              v-model="bundleRolloutTargetIds"
+                              multiple
+                              filterable
+                              collapse-tags
+                              collapse-tags-tooltip
+                              placeholder="选择要下发的节点"
+                            >
+                              <el-option
+                                v-for="option in rolloutNodeOptions"
+                                :key="option.value"
+                                :label="option.label"
+                                :value="option.value"
+                              >
+                                <div class="select-option">
+                                  <span>{{ option.label }}</span>
+                                  <span class="entity-subtle mono">{{ option.meta }}</span>
+                                </div>
+                              </el-option>
+                            </el-select>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">快捷选择</div>
+                            <div class="inline-button-row inline-button-row--start">
+                              <el-button plain @click="selectOnlineRolloutNodes">全选在线</el-button>
+                              <el-button plain @click="clearRolloutSelection">清空选择</el-button>
+                            </div>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">已选节点</div>
+                            <div class="chip-stack">
+                              <el-tag
+                                v-for="node in selectedRolloutNodes"
+                                :key="node.id"
+                                size="small"
+                                effect="plain"
+                              >
+                                {{ (node.name || node.id) + (bundleNodeOperationState[node.id] === 'applying' ? ' · 下发中' : '') }}
+                              </el-tag>
+                              <span v-if="!selectedRolloutNodes.length" class="entity-subtle">尚未选择节点</span>
+                            </div>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">当前已关联节点</div>
+                            <div v-if="currentBundleAssignedNodes.length" class="list-stack">
+                              <div v-for="node in currentBundleAssignedNodes" :key="node.id" class="list-item">
+                                <div class="list-item-top">
+                                  <span>{{ node.name || node.id }}</span>
+                                  <div class="inline-button-row">
+                                    <el-tag
+                                      v-if="bundleNodeOperationState[node.id] === 'removing'"
+                                      size="small"
+                                      type="warning"
+                                      effect="light"
+                                      round
+                                    >
+                                      移除中
+                                    </el-tag>
+                                    <el-button
+                                      link
+                                      type="danger"
+                                      :loading="bundleDetachSubmittingId === node.id"
+                                      @click="removeNodeFromSelectedBundle(node)"
+                                    >
+                                      移除
+                                    </el-button>
+                                  </div>
+                                </div>
+                                <div class="list-item-subtle mono">
+                                  {{ node.id + " · " + (node.hostname || "—") + " · " + (node.managementIp || "—") }}
+                                </div>
+                              </div>
+                            </div>
+                            <el-empty v-else description="当前没有节点使用该策略"></el-empty>
+                          </div>
+
+                          <div class="save-panel-actions">
+                            <el-button
+                              type="primary"
+                              :loading="bundleRolloutSubmitting"
+                              :disabled="!bundleRolloutTargetIds.length"
+                              @click="submitBundleRollout"
+                            >
+                              下发当前版本
+                            </el-button>
+                          </div>
+                        </el-card>
+                        </template>
+                      </div>
+                    </div>
+                  </template>
+                  <el-empty v-else description="未找到策略详情"></el-empty>
+                </div>
+              </template>
+            </section>
+
+            <section v-show="activeView === 'releases'" class="view-stack">
+              <template v-if="!isReleaseDetailPage">
+                <div class="metric-grid data-metric-grid">
+                  <article v-for="card in releaseOverviewCards" :key="card.label" class="metric-card metric-card--compact">
+                    <div class="metric-label">{{ card.label }}</div>
+                    <div class="metric-value">{{ card.value }}</div>
+                    <div class="metric-subtle">{{ card.subtle }}</div>
+                  </article>
+                </div>
+
+                <el-card class="panel-card" shadow="never">
+                  <div class="panel-head panel-head--aligned">
+                    <div>
+                      <div class="panel-kicker">Release Delivery</div>
+                      <h3 class="panel-title">发布包</h3>
+                    </div>
+                    <el-form class="toolbar-form" :inline="true">
+                      <el-form-item label="搜索">
+                        <el-input
+                          v-model="filters.releases.search"
+                          clearable
+                          placeholder="版本 / 下载地址 / 备注"
+                          @keyup.enter="loadReleases"
+                        ></el-input>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button plain @click="loadReleases">应用</el-button>
+                      </el-form-item>
+                    </el-form>
+                  </div>
+
+                  <div class="release-entry-grid">
+                    <article class="release-entry-card release-entry-card--build">
+                      <div class="release-entry-copy">
+                        <div class="panel-kicker">Managed Build</div>
+                        <div class="release-entry-title">构建 Agent 发布</div>
+                        <div class="release-entry-text">
+                          由主控为多个平台构建 Agent 包，并可直接生成一个可下发升级的版本。
+                        </div>
+                      </div>
+                      <div class="release-entry-actions">
+                        <el-button type="primary" @click="openReleaseBuildDialog">进入构建</el-button>
+                      </div>
+                    </article>
+
+                    <article class="release-entry-card release-entry-card--manual">
+                      <div class="release-entry-copy">
+                        <div class="panel-kicker">External Artifact</div>
+                        <div class="release-entry-title">新建外部发布包</div>
+                        <div class="release-entry-text">
+                          手动登记已有下载地址和校验和，适合录入外部构建产物或历史版本。
+                        </div>
+                      </div>
+                      <div class="release-entry-actions">
+                        <el-button plain @click="openReleaseCreateDialog">新建发布</el-button>
+                      </div>
+                    </article>
+                  </div>
+
+                  <el-table
+                    class="interactive-table"
+                    :data="releases"
+                    stripe
+                    highlight-current-row
+                    row-key="version"
+                    height="520"
+                    empty-text="暂无发布包"
+                    @row-click="handleReleaseRowClick"
+                  >
+                    <el-table-column prop="version" label="版本" min-width="180">
+                      <template #default="scope">
+                        <span class="mono">{{ scope.row.version }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="下载地址" min-width="280">
+                      <template #default="scope">{{ truncate(scope.row.downloadUrl || '—', 64) }}</template>
+                    </el-table-column>
+                    <el-table-column label="校验和" min-width="210">
+                      <template #default="scope">
+                        <span class="mono">{{ truncate(scope.row.checksum || '—', 28) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="创建时间" min-width="180">
+                      <template #default="scope">
+                        <span class="mono">{{ formatTime(scope.row.createdAt) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="详情" width="100" align="right">
+                      <template #default="scope">
+                        <el-button link type="primary" @click.stop="openReleaseDetail(scope.row.version)">查看</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </el-card>
+              </template>
+
+              <template v-else>
+                <div class="detail-page">
+                  <div class="detail-page-head">
+                    <div class="detail-page-title-group">
+                      <div class="panel-kicker">Release Detail</div>
+                      <h3 class="detail-page-title">{{ selectedRelease ? selectedRelease.version : "发布详情" }}</h3>
+                      <div v-if="selectedRelease" class="detail-page-subtle mono">{{ formatTime(selectedRelease.createdAt) }}</div>
+                    </div>
+                    <div class="detail-page-actions">
+                      <el-button plain @click="openReleaseBuildDialog">构建新版本</el-button>
+                      <el-button plain @click="navigateToView('releases')">返回发布列表</el-button>
+                    </div>
+                  </div>
+
+                  <template v-if="selectedRelease">
+                    <div class="detail-summary-grid">
+                      <div v-for="item in selectedReleaseHighlights" :key="item.label" class="detail-stat-card">
+                        <div class="detail-stat-label">{{ item.label }}</div>
+                        <div class="detail-stat-value" :class="{ mono: item.mono }">{{ item.value }}</div>
+                      </div>
+                    </div>
+
+                    <div class="detail-page-grid">
+                      <div class="detail-page-main">
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Release Payload</div>
+                              <h3 class="panel-title">发布信息</h3>
+                            </div>
+                          </div>
+                          <el-descriptions :column="1" border size="small" class="detail-descriptions">
+                            <el-descriptions-item label="版本">
+                              <span class="mono">{{ selectedRelease.version }}</span>
+                            </el-descriptions-item>
+                            <el-descriptions-item label="下载地址">
+                              {{ selectedRelease.downloadUrl || ((selectedRelease.assets || []).length ? '由主控按平台分发' : '—') }}
+                            </el-descriptions-item>
+                            <el-descriptions-item label="校验和">
+                              <span class="mono">{{ selectedRelease.checksum || ((selectedRelease.assets || []).length ? '按平台分别校验' : '—') }}</span>
+                            </el-descriptions-item>
+                            <el-descriptions-item label="创建时间">
+                              <span class="mono">{{ formatTime(selectedRelease.createdAt) }}</span>
+                            </el-descriptions-item>
+                            <el-descriptions-item label="备注">
+                              {{ selectedRelease.notes || '—' }}
+                            </el-descriptions-item>
+                          </el-descriptions>
+
+                          <div v-if="(selectedRelease.assets || []).length" class="detail-section">
+                            <div class="detail-title-line">平台资产</div>
+                            <el-table :data="selectedRelease.assets" stripe>
+                              <el-table-column label="平台" min-width="160">
+                                <template #default="scope">
+                                  <span class="mono">{{ scope.row.goos }}/{{ scope.row.goarch }}</span>
+                                </template>
+                              </el-table-column>
+                              <el-table-column label="校验和" min-width="220">
+                                <template #default="scope">
+                                  <span class="mono">{{ truncate(scope.row.checksum || '—', 28) }}</span>
+                                </template>
+                              </el-table-column>
+                              <el-table-column label="下载地址" min-width="260">
+                                <template #default="scope">
+                                  <span class="mono">{{ truncate(scope.row.downloadUrl || '—', 48) }}</span>
+                                </template>
+                              </el-table-column>
+                            </el-table>
+                          </div>
+                        </el-card>
+
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Raw Payload</div>
+                              <h3 class="panel-title">完整 JSON</h3>
+                            </div>
+                          </div>
+                          <pre class="code-block code-block--tall">{{ prettyJson(selectedRelease) }}</pre>
+                        </el-card>
+                      </div>
+
+                      <div class="detail-page-side">
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head">
+                            <div>
+                              <div class="panel-kicker">Release Notes</div>
+                              <h3 class="panel-title">备注与分发</h3>
+                            </div>
+                          </div>
+                          <div class="detail-section">
+                            <div class="detail-title-line">下载地址</div>
+                            <div class="kv-list">
+                              <div class="kv-row">
+                                <span class="kv-key mono">URL</span>
+                                <span class="kv-value">{{ selectedRelease.downloadUrl || ((selectedRelease.assets || []).length ? "由主控按平台分发" : "—") }}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="detail-section">
+                            <div class="detail-title-line">备注</div>
+                            <div class="note-card">{{ selectedRelease.notes || "—" }}</div>
+                          </div>
+                        </el-card>
+
+                        <el-card class="panel-card" shadow="never">
+                          <div class="panel-head panel-head--aligned">
+                            <div>
+                              <div class="panel-kicker">Rollout</div>
+                              <h3 class="panel-title">升级到节点</h3>
+                            </div>
+                            <div class="inline-button-row">
+                              <el-button plain @click="loadRolloutNodes">刷新节点</el-button>
+                              <el-button plain @click="selectOnlineReleaseRolloutNodes">全选在线</el-button>
+                              <el-button plain @click="selectUpgradeableReleaseRolloutNodes">只选待升级</el-button>
+                              <el-button plain @click="clearReleaseRolloutSelection">清空</el-button>
+                            </div>
+                          </div>
+
+                          <el-alert
+                            v-if="releaseRolloutError"
+                            class="inline-alert"
+                            :closable="false"
+                            show-icon
+                            type="error"
+                            :title="releaseRolloutError"
+                          ></el-alert>
+                          <el-alert
+                            v-if="releaseRolloutSuccess"
+                            class="inline-alert"
+                            :closable="false"
+                            show-icon
+                            type="success"
+                            :title="releaseRolloutSuccess"
+                          ></el-alert>
+
+                          <div class="metric-grid rollout-metric-grid">
+                            <article
+                              v-for="card in releaseRolloutSummaryCards"
+                              :key="card.label"
+                              class="metric-card metric-card--compact metric-card--tiny"
+                            >
+                              <div class="metric-label">{{ card.label }}</div>
+                              <div class="metric-value">{{ card.value }}</div>
+                              <div class="metric-subtle">{{ card.subtle }}</div>
+                            </article>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">目标节点</div>
+                            <el-select
+                              v-model="releaseRolloutTargetIds"
+                              multiple
+                              filterable
+                              collapse-tags
+                              collapse-tags-tooltip
+                              placeholder="选择要升级的节点"
+                            >
+                              <el-option
+                                v-for="option in rolloutNodeOptions"
+                                :key="option.value"
+                                :label="option.label"
+                                :value="option.value"
+                              >
+                                <div class="select-option">
+                                  <span>{{ option.label }}</span>
+                                  <span class="entity-subtle mono">{{ option.meta }}</span>
+                                </div>
+                              </el-option>
+                            </el-select>
+                          </div>
+
+                          <div class="detail-section">
+                            <div class="detail-title-line">已选节点</div>
+                            <div class="chip-stack">
+                              <el-tag
+                                v-for="node in selectedReleaseRolloutNodes"
+                                :key="node.id"
+                                size="small"
+                                effect="plain"
+                              >
+                                {{ (node.name || node.id) + ' · ' + (node.agentVersion || '—') + (nodePlatformLabel(node) ? (' · ' + nodePlatformLabel(node)) : '') }}
+                              </el-tag>
+                              <span v-if="!selectedReleaseRolloutNodes.length" class="entity-subtle">尚未选择节点</span>
+                            </div>
+                          </div>
+
+                          <div class="save-panel-actions">
+                            <el-button
+                              type="primary"
+                              :loading="releaseRolloutSubmitting"
+                              :disabled="!releaseRolloutTargetIds.length"
+                              @click="submitReleaseRollout"
+                            >
+                              下发升级任务
+                            </el-button>
+                          </div>
+                        </el-card>
+                      </div>
+                    </div>
+                  </template>
+                  <el-empty v-else description="未找到发布详情"></el-empty>
+                </div>
+              </template>
+            </section>
+
+            <section v-show="activeView === 'events'" class="view-stack">
+              <el-card class="panel-card" shadow="never">
+                <div class="panel-head panel-head--aligned">
+                  <div>
+                    <div class="panel-kicker">Event Explorer</div>
+                    <h3 class="panel-title">事件明细</h3>
+                  </div>
+                  <el-form class="toolbar-form" :inline="true">
+                    <el-form-item label="关键字">
+                      <el-input
+                        v-model="filters.eventsView.search"
+                        clearable
+                        placeholder="eventId / streamId / SNI / Host / DNS"
+                        @keyup.enter="applyEventFilters"
+                      ></el-input>
+                    </el-form-item>
+                    <el-form-item label="节点">
+                      <el-select
+                        v-model="filters.eventsView.agentId"
+                        filterable
+                        clearable
+                        placeholder="选择节点"
+                      >
+                        <el-option
+                          v-for="node in nodes"
+                          :key="node.id"
+                          :label="(node.name || node.id) + ' (' + node.id + ')'"
+                          :value="node.id"
+                        >
+                          <div class="select-option">
+                            <span>{{ node.name || node.id }}</span>
+                            <span class="entity-subtle mono">{{ node.id }}</span>
+                          </div>
+                        </el-option>
+                      </el-select>
+                    </el-form-item>
+                      <el-form-item label="类型">
+                        <el-select v-model="filters.eventsView.type" placeholder="全部类型" clearable>
+                          <el-option label="规则命中" value="rule_hit"></el-option>
+                          <el-option label="流动作" value="stream_action"></el-option>
+                          <el-option label="可疑流量" value="suspicious_flow"></el-option>
+                          <el-option label="分析器错误" value="analyzer_error"></el-option>
+                          <el-option label="修改错误" value="modify_error"></el-option>
+                          <el-option label="匹配错误" value="ruleset_match_error"></el-option>
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="协议">
+                        <el-select v-model="filters.eventsView.proto" placeholder="全部协议" clearable>
+                          <el-option label="TCP" value="tcp"></el-option>
+                          <el-option label="UDP" value="udp"></el-option>
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="动作">
+                        <el-select v-model="filters.eventsView.action" placeholder="全部动作" clearable>
+                          <el-option label="Allow" value="allow"></el-option>
+                          <el-option label="Block" value="block"></el-option>
+                          <el-option label="Drop" value="drop"></el-option>
+                          <el-option label="Modify" value="modify"></el-option>
+                          <el-option label="Maybe" value="maybe"></el-option>
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="规则名">
+                        <el-input
+                          v-model="filters.eventsView.ruleName"
+                          clearable
+                          placeholder="例如：block-ads"
+                          @keyup.enter="applyEventFilters"
+                        ></el-input>
+                      </el-form-item>
+                      <el-form-item label="源 IP">
+                        <el-input
+                          v-model="filters.eventsView.srcIp"
+                          clearable
+                          placeholder="例如：192.168.19.156"
+                          @keyup.enter="applyEventFilters"
+                        ></el-input>
+                      </el-form-item>
+                      <el-form-item label="目的 IP">
+                        <el-input
+                          v-model="filters.eventsView.dstIp"
+                          clearable
+                          placeholder="例如：172.67.221.87"
+                          @keyup.enter="applyEventFilters"
+                        ></el-input>
+                      </el-form-item>
+                      <el-form-item label="端口">
+                        <el-input
+                          v-model="filters.eventsView.port"
+                          clearable
+                          placeholder="例如：443"
+                          @keyup.enter="applyEventFilters"
+                        ></el-input>
+                      </el-form-item>
+                      <el-form-item label="最小可疑度">
+                        <el-input-number v-model="filters.eventsView.minSuspicion" :min="0" :max="100" :step="10"></el-input-number>
+                      </el-form-item>
+                      <el-form-item label="开始时间">
+                      <el-date-picker
+                        v-model="filters.eventsView.since"
+                        type="datetime"
+                        value-format="x"
+                        placeholder="开始时间"
+                      ></el-date-picker>
+                    </el-form-item>
+                    <el-form-item label="结束时间">
+                      <el-date-picker
+                        v-model="filters.eventsView.until"
+                        type="datetime"
+                        value-format="x"
+                        placeholder="结束时间"
+                      ></el-date-picker>
+                    </el-form-item>
+                    <el-form-item>
+                      <el-button plain @click="applyEventFilters">应用</el-button>
+                    </el-form-item>
+                    <el-form-item>
+                      <el-button plain @click="resetEventFilters">重置</el-button>
+                    </el-form-item>
+                    <el-form-item>
+                      <el-button plain @click="exportEventRows">导出 CSV</el-button>
+                    </el-form-item>
+                  </el-form>
+                </div>
+
+                <el-table :data="eventRows" stripe height="620" empty-text="当前筛选条件下没有事件" v-loading="loading.eventsView">
+                  <el-table-column label="时间" min-width="170">
+                    <template #default="scope">
+                      <span class="mono">{{ formatTime(scope.row.time) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="agentId" label="节点" min-width="120"></el-table-column>
+                  <el-table-column label="流信息" min-width="260">
+                    <template #default="scope">
+                      <span class="mono">{{ eventFlowLabel(scope.row) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="类型" min-width="120">
+                    <template #default="scope">{{ translateEventType(scope.row.type) }}</template>
+                  </el-table-column>
+                  <el-table-column label="协议 / 动作" min-width="140">
+                    <template #default="scope">
+                      <span class="mono">{{ (scope.row.proto || "—") + " / " + (scope.row.action || "—") }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="摘要" min-width="240">
+                    <template #default="scope">{{ eventPropsSummary(scope.row) }}</template>
+                  </el-table-column>
+                  <el-table-column label="详情" width="100" align="right">
+                    <template #default="scope">
+                      <el-button link type="primary" @click="openEventDetail(scope.row)">查看</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <div class="pagination-row">
+                  <el-pagination
+                    background
+                    layout="total, sizes, prev, pager, next"
+                    :total="eventRowsTotal"
+                    :current-page="eventRowsPage"
+                    :page-size="eventRowsPageSize"
+                    :page-sizes="[20, 50, 100]"
+                    @current-change="handleEventPageChange"
+                    @size-change="handleEventPageSizeChange"
+                  ></el-pagination>
+                </div>
+              </el-card>
+            </section>
+
+          </main>
+        </section>
+      </div>
+
+      <el-dialog
+        v-model="eventDetailDialogVisible"
+        :title="eventDetailEvent ? (translateEventType(eventDetailEvent.type) + ' 详情') : '事件详情'"
+        width="760px"
+        destroy-on-close
+      >
+        <template v-if="eventDetailEvent">
+          <div class="detail-section">
+            <el-descriptions :column="1" border size="small" class="detail-descriptions">
+              <el-descriptions-item label="时间">
+                <span class="mono">{{ formatTime(eventDetailEvent.time) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="节点">
+                <span class="mono">{{ eventDetailEvent.agentId || "—" }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="事件 ID">
+                <span class="mono">{{ eventDetailEvent.eventId || "—" }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="流 ID">
+                <span class="mono">{{ eventDetailEvent.streamId || "—" }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="流信息">
+                <span class="mono">{{ eventFlowLabel(eventDetailEvent) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="协议 / 动作">
+                <span class="mono">{{ (eventDetailEvent.proto || "—") + " / " + (eventDetailEvent.action || "—") }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="规则 / 可疑度">
+                <span>{{ eventDetailEvent.ruleName || "—" }}</span>
+                <span class="entity-subtle mono"> · {{ eventDetailEvent.suspicion || 0 }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="策略版本">
+                <span class="mono">{{ eventDetailEvent.bundleVer || "—" }}</span>
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+
+          <div class="detail-section">
+            <div class="detail-title-line">属性摘要</div>
+            <div class="note-card">{{ eventPropsSummary(eventDetailEvent) }}</div>
+          </div>
+
+          <div v-for="section in eventDetailSections()" :key="section.title" class="detail-section">
+            <div class="detail-title-line">{{ section.title }}</div>
+            <div class="kv-list">
+              <div v-for="row in section.rows" :key="section.title + row.label" class="kv-row">
+                <span class="kv-key mono">{{ row.label }}</span>
+                <span class="kv-value" :class="{ mono: row.mono }">{{ row.value }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <div class="detail-title-line">完整 Props</div>
+            <pre class="code-block code-block--command">{{ eventDetailPropsText }}</pre>
+          </div>
+        </template>
+
+        <template #footer>
+          <div class="inline-button-row inline-button-row--start">
+            <el-button @click="eventDetailDialogVisible = false">关闭</el-button>
+          </div>
+        </template>
+      </el-dialog>
+
+      <el-dialog v-model="nodeInstallDialogVisible" title="添加节点" width="860px" destroy-on-close>
+        <el-alert
+          v-if="nodeInstallError"
+          class="inline-alert"
+          :closable="false"
+          show-icon
+          type="error"
+          :title="nodeInstallError"
+        ></el-alert>
+
+        <div class="detail-section">
+          <div class="detail-title-line">节点信息</div>
+          <div class="editor-grid">
+            <label class="editor-field">
+              <span class="editor-label">节点名称</span>
+              <el-input v-model="nodeInstallForm.name" placeholder="例如：edge-hk-01"></el-input>
+            </label>
+            <label class="editor-field editor-field--span">
+              <span class="editor-label">标签</span>
+              <el-input
+                v-model="nodeInstallForm.labelsText"
+                type="textarea"
+                :rows="2"
+                placeholder="使用逗号或换行分隔，例如：edge, hk, prod"
+              ></el-input>
+            </label>
+          </div>
+        </div>
+
+        <template #footer>
+          <div class="inline-button-row inline-button-row--start">
+            <el-button @click="nodeInstallDialogVisible = false">关闭</el-button>
+            <el-button type="primary" :loading="nodeInstallSubmitting" @click="submitNodeInstall">保存</el-button>
+          </div>
+        </template>
+      </el-dialog>
+
+      <el-dialog
+        v-model="nodeCommandDialogVisible"
+        :title="nodeCommandTarget ? ((nodeCommandTarget.name || nodeCommandTarget.id) + ' 节点命令') : '节点命令'"
+        width="720px"
+        destroy-on-close
+      >
+        <el-alert
+          v-if="nodeCommandError"
+          class="inline-alert"
+          :closable="false"
+          show-icon
+          type="error"
+          :title="nodeCommandError"
+        ></el-alert>
+
+        <div v-loading="nodeCommandSubmitting" class="node-command-shell">
+          <template v-if="nodeCommandResult">
+            <div class="node-command-meta">
+              <div class="node-command-meta-item">
+                <span class="node-command-meta-label">节点 ID</span>
+                <span class="mono">{{ nodeCommandResult.nodeId }}</span>
+              </div>
+              <div class="node-command-meta-item">
+                <span class="node-command-meta-label">服务名</span>
+                <span class="mono">{{ nodeCommandResult.serviceName }}</span>
+              </div>
+              <div class="node-command-meta-item node-command-meta-item--full">
+                <span class="node-command-meta-label">二进制路径</span>
+                <span class="mono">{{ nodeCommandResult.binaryPath }}</span>
+              </div>
+            </div>
+
+            <div class="node-command-grid">
+              <section class="node-command-card">
+                <div class="node-command-card-head">
+                  <div class="detail-title-line">安装命令</div>
+                  <span class="node-command-card-note">用于新节点安装</span>
+                </div>
+                <pre class="code-block code-block--command">{{ nodeCommandResult.installCommand }}</pre>
+                <div class="inline-button-row inline-button-row--start">
+                  <el-button
+                    type="primary"
+                    plain
+                    @click="copyNodeCommand(nodeCommandResult.installCommand, '安装命令已复制。')"
+                  >
+                    复制安装命令
+                  </el-button>
+                </div>
+              </section>
+
+              <section class="node-command-card">
+                <div class="node-command-card-head">
+                  <div class="detail-title-line">卸载命令</div>
+                  <span class="node-command-card-note">用于节点卸载</span>
+                </div>
+                <pre class="code-block code-block--command">{{ nodeCommandResult.uninstallCommand }}</pre>
+                <div class="inline-button-row inline-button-row--start">
+                  <el-button
+                    type="primary"
+                    plain
+                    @click="copyNodeCommand(nodeCommandResult.uninstallCommand, '卸载命令已复制。')"
+                  >
+                    复制卸载命令
+                  </el-button>
+                </div>
+              </section>
+            </div>
+          </template>
+        </div>
+
+        <template #footer>
+          <div class="inline-button-row inline-button-row--start">
+            <el-button @click="nodeCommandDialogVisible = false">关闭</el-button>
+          </div>
+        </template>
+      </el-dialog>
+
+      <el-dialog v-model="agentBuildDialogVisible" title="构建 Agent 发布" width="760px" destroy-on-close>
+        <div class="detail-section">
+          <div class="editor-help">
+            在发布页构建新的 Agent 二进制或直接生成一个可下发的版本，随后可在发布详情中选择节点执行升级。
+          </div>
+        </div>
+
+        <el-alert
+          v-if="agentBuildError"
+          class="inline-alert"
+          :closable="false"
+          show-icon
+          type="error"
+          :title="agentBuildError"
+        ></el-alert>
+        <el-alert
+          v-if="agentBuildSuccess"
+          class="inline-alert"
+          :closable="false"
+          show-icon
+          type="success"
+          :title="agentBuildSuccess"
+        ></el-alert>
+
+        <div class="detail-section">
+          <div class="detail-title-line">目标平台</div>
+          <el-checkbox-group v-model="agentBuildForm.targets" class="chip-stack">
+            <el-checkbox
+              v-for="target in availableBuildTargets"
+              :key="target.key"
+              :label="target.key"
+              border
+            >
+              {{ target.label }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </div>
+
+        <div class="detail-section">
+          <div class="editor-grid">
+            <label class="editor-field editor-field--switch">
+              <span class="editor-label">强制重建</span>
+              <el-switch v-model="agentBuildForm.force"></el-switch>
+            </label>
+            <label class="editor-field">
+              <span class="editor-label">发布版本</span>
+              <el-input v-model="agentBuildForm.releaseVersion" placeholder="例如：agent-v0.1.1"></el-input>
+            </label>
+            <label class="editor-field editor-field--span">
+              <span class="editor-label">发布备注</span>
+              <el-input
+                v-model="agentBuildForm.releaseNotes"
+                type="textarea"
+                :rows="2"
+                placeholder="可选：记录本次 Agent 更新内容"
+              ></el-input>
+            </label>
+          </div>
+        </div>
+
+        <div v-if="agentBuildResults.length" class="detail-section">
+          <div class="detail-title-line">构建结果</div>
+          <el-table :data="agentBuildResults" stripe>
+            <el-table-column label="平台" min-width="160">
+              <template #default="scope">
+                <span class="mono">{{ scope.row.goos }}/{{ scope.row.goarch }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="路径" min-width="280">
+              <template #default="scope">
+                <span class="mono">{{ scope.row.binaryPath }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="校验和" min-width="220">
+              <template #default="scope">
+                <span class="mono">{{ truncate(scope.row.checksum, 28) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="构建时间" min-width="180">
+              <template #default="scope">
+                <span class="mono">{{ formatTime(scope.row.builtAt) }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <template #footer>
+          <div class="inline-button-row inline-button-row--start">
+            <el-button @click="agentBuildDialogVisible = false">关闭</el-button>
+            <el-button type="primary" :loading="agentBuildSubmitting" @click="buildManagedAgentBinary()">
+              仅构建二进制
+            </el-button>
+            <el-button type="primary" plain :loading="agentBuildSubmitting" @click="publishManagedAgentRelease()">
+              构建并创建发布
+            </el-button>
+          </div>
+        </template>
+      </el-dialog>
+
+      <el-dialog v-model="releaseDialogVisible" title="新建发布包" width="720px" destroy-on-close>
+        <el-alert
+          v-if="releaseError"
+          class="inline-alert"
+          :closable="false"
+          show-icon
+          type="error"
+          :title="releaseError"
+        ></el-alert>
+        <el-alert
+          v-if="releaseSuccess"
+          class="inline-alert"
+          :closable="false"
+          show-icon
+          type="success"
+          :title="releaseSuccess"
+        ></el-alert>
+
+        <div class="editor-grid">
+          <label class="editor-field">
+            <span class="editor-label">版本</span>
+            <el-input v-model="releaseForm.version" placeholder="例如：agent-v0.1.2"></el-input>
+          </label>
+          <label class="editor-field editor-field--span">
+            <span class="editor-label">下载地址</span>
+            <el-input v-model="releaseForm.downloadUrl" placeholder="例如：https://example.com/opengfw-agent.tar.gz"></el-input>
+          </label>
+          <label class="editor-field editor-field--span">
+            <span class="editor-label">校验和</span>
+            <el-input v-model="releaseForm.checksum" placeholder="例如：sha256:..."></el-input>
+          </label>
+          <label class="editor-field editor-field--span">
+            <span class="editor-label">备注</span>
+            <el-input
+              v-model="releaseForm.notes"
+              type="textarea"
+              :rows="5"
+              placeholder="填写本次发布说明"
+            ></el-input>
+          </label>
+        </div>
+
+        <template #footer>
+          <div class="inline-button-row inline-button-row--start">
+            <el-button @click="releaseDialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="releaseSubmitting" @click="submitReleaseCreate">保存发布包</el-button>
+          </div>
+        </template>
+      </el-dialog>
+
+      <el-dialog v-model="accountDialogVisible" title="账号设置" width="440px" destroy-on-close>
+        <div class="dialog-copy">
+          当前账号：<span class="mono">{{ auth.user ? auth.user.username : '—' }}</span>
+        </div>
+        <div class="dialog-copy">
+          更新密码前需要先输入当前密码。新密码至少 8 位，且不能与当前密码相同。
+        </div>
+        <el-alert
+          v-if="accountError"
+          class="inline-alert"
+          :closable="false"
+          show-icon
+          type="error"
+          :title="accountError"
+        ></el-alert>
+        <el-alert
+          v-if="accountSuccess"
+          class="inline-alert"
+          :closable="false"
+          show-icon
+          type="success"
+          :title="accountSuccess"
+        ></el-alert>
+        <el-form label-position="top" :model="passwordForm">
+            <el-form-item label="当前密码">
+              <el-input
+                v-model="passwordForm.currentPassword"
+                type="password"
+                show-password
+                autocomplete="current-password"
+                placeholder="请输入当前密码"
+              ></el-input>
+            </el-form-item>
+            <el-form-item label="新密码">
+              <el-input
+                v-model="passwordForm.newPassword"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                placeholder="至少 8 位，且不能与当前密码相同"
+              ></el-input>
+            </el-form-item>
+            <el-form-item label="确认新密码">
+              <el-input
+                v-model="passwordForm.confirmPassword"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                placeholder="再次输入新密码"
+              ></el-input>
+            </el-form-item>
+            <div class="dialog-actions">
+              <el-button type="primary" :loading="passwordSubmitting" @click="submitPasswordChange">更新登录密码</el-button>
+              <el-button plain @click="logout">退出登录</el-button>
+            </div>
+        </el-form>
+      </el-dialog>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/element-plus@2.11.5/dist/index.full.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" defer></script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

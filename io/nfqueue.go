@@ -164,7 +164,7 @@ func NewNFQueuePacketIO(config NFQueuePacketIOConfig) (PacketIO, error) {
 			Control: func(network, address string, c syscall.RawConn) error {
 				var err error
 				cErr := c.Control(func(fd uintptr) {
-					err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, nfqueueConnMarkAccept)
+					err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, unix.SO_MARK, nfqueueConnMarkAccept)
 				})
 				if cErr != nil {
 					return cErr

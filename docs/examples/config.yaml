@@ -1,0 +1,23 @@
+io:
+  # NFQUEUE length. 0 means using the built-in default (128).
+  queueSize: 128
+  # Netlink socket buffer sizes. 0 means system default.
+  rcvBuf: 0
+  sndBuf: 0
+  # false = FORWARD chain, true = INPUT/OUTPUT chains.
+  local: false
+  # Return TCP RST for blocked TCP streams. Not supported with local: true.
+  rst: false
+
+workers:
+  # <= 0 means auto-detect from CPU count.
+  count: 0
+  queueSize: 64
+  tcpMaxBufferedPagesTotal: 4096
+  tcpMaxBufferedPagesPerConn: 64
+  udpMaxStreams: 4096
+
+ruleset:
+  # Empty means auto-download when geoip()/geosite() is actually used.
+  geoip: ""
+  geosite: ""

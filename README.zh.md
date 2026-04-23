@@ -15,6 +15,27 @@ Telegram 群组： https://t.me/OpGFW
 > [!CAUTION]
 > 本项目仍处于早期开发阶段。测试时自行承担风险。我们正在寻求贡献者一起完善本项目。
 
+## 文档导航
+
+- 完整项目说明与使用文档：[`docs/PROJECT_GUIDE.zh.md`](docs/PROJECT_GUIDE.zh.md)
+- 主控快速部署说明：[`docs/DEPLOY_MASTER.zh.md`](docs/DEPLOY_MASTER.zh.md)
+- 示例配置：[`docs/examples/config.yaml`](docs/examples/config.yaml)
+- 示例规则：[`docs/examples/rules.yaml`](docs/examples/rules.yaml)
+
+## 快速开始
+
+```bash
+go build -o OpenGFW .
+sudo ./OpenGFW -c docs/examples/config.yaml docs/examples/rules.yaml
+```
+
+补充说明：
+
+- 需要 Linux、Netfilter/NFQUEUE 和足够的防火墙管理权限
+- 当前 I/O 后端只有 NFQUEUE
+- 发送 `SIGHUP` 可以热重载规则文件
+- `config.yaml` 不会随 `SIGHUP` 一起热重载
+
 ## 功能
 
 - 完整的 IP/TCP 重组，各种协议解析器
@@ -39,3 +60,13 @@ Telegram 群组： https://t.me/OpGFW
 - VPN/代理服务滥用防护
 - 流量分析 (纯日志模式)
 - 助你实现你的独裁野心
+
+## 项目结构
+
+- `cmd/`：CLI、配置加载、日志、规则热重载
+- `engine/`：worker、TCP/UDP 流处理、规则判定
+- `io/`：NFQUEUE 接入与防火墙规则注入
+- `analyzer/`：协议分析器
+- `modifier/`：报文修改器，目前仅 DNS
+- `ruleset/`：规则编译、表达式引擎、Geo 匹配
+- `docs/`：中文说明、示例配置和规则

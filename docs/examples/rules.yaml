@@ -1,0 +1,24 @@
+- name: allow-lan
+  action: allow
+  expr: cidr(ip.src, "192.168.0.0/16") || cidr(ip.dst, "192.168.0.0/16")
+
+- name: log-tls-sni
+  log: true
+  expr: tls.req.sni != nil
+
+- name: block-ads-by-sni
+  action: block
+  expr: tls.req.sni != nil && geosite(tls.req.sni, "category-ads-all")
+
+- name: block-suspicious-fet
+  action: block
+  expr: fet.yes == true
+
+- name: rewrite-ads-dns
+  action: modify
+  modifier:
+    name: dns
+    args:
+      a: 127.0.0.1
+      aaaa: "::1"
+  expr: proto == "udp" && dns.qr == true && dns.questions != nil && len(dns.questions) > 0 && dns.questions[0].name == "ads.example.com"

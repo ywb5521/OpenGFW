@@ -303,6 +303,11 @@ type Function struct {
 
 func buildFunctionMap(config *BuiltinConfig) map[string]*Function {
 	geoMatcher := geo.NewGeoMatcher(config.GeoSiteFilename, config.GeoIpFilename)
+	dialContext := config.ProtectedDialContext
+	if dialContext == nil {
+		d := &net.Dialer{}
+		dialContext = d.DialContext
+	}
 	return map[string]*Function{
 		"geoip": {
 			InitFunc:  geoMatcher.LoadGeoIP,
@@ -356,7 +361,7 @@ func buildFunctionMap(config *BuiltinConfig) map[string]*Function {
 						if serverStr != nil {
 							address = serverStr.Value
 						}
-						return config.ProtectedDialContext(ctx, network, address)
+						return dialContext(ctx, network, address)
 					},
 				}
 				if len(*args) > 1 {

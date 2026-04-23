@@ -1,6 +1,8 @@
 module github.com/apernet/OpenGFW
 
-go 1.21
+go 1.26.0
+
+toolchain go1.26.2
 
 require (
 	github.com/bwmarrin/snowflake v0.3.0
@@ -9,6 +11,7 @@ require (
 	github.com/florianl/go-nfqueue v1.3.2-0.20231218173729-f2bdeb033acf
 	github.com/google/gopacket v1.1.20-0.20220810144506-32ee38206866
 	github.com/hashicorp/golang-lru/v2 v2.0.7
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/mdlayher/netlink v1.6.0
 	github.com/quic-go/quic-go v0.41.0
 	github.com/spf13/cobra v1.8.0
@@ -25,6 +28,9 @@ require (
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/josharian/native v1.0.0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mdlayher/socket v0.1.1 // indirect
@@ -40,7 +46,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
 	golang.org/x/net v0.19.0 // indirect
-	golang.org/x/sync v0.5.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/text v0.29.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )
