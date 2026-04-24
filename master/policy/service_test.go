@@ -70,8 +70,8 @@ func TestAssignBundleMergesDefaultReportingTelemetry(t *testing.T) {
 	if payload.Bundle.Version != custom.Version {
 		t.Fatalf("expected merged bundle to keep custom version %q, got %q", custom.Version, payload.Bundle.Version)
 	}
-	if !payload.Bundle.Runtime.IO.Local {
-		t.Fatalf("expected merged bundle to force local capture, got %+v", payload.Bundle.Runtime.IO)
+	if payload.Bundle.Runtime.IO.Local {
+		t.Fatalf("expected merged bundle to preserve custom capture mode, got %+v", payload.Bundle.Runtime.IO)
 	}
 	if !payload.Bundle.Telemetry.Events.RuleHit || !payload.Bundle.Telemetry.Events.FlowSummary || payload.Bundle.Telemetry.Events.SuspiciousOnly {
 		t.Fatalf("unexpected merged telemetry events: %+v", payload.Bundle.Telemetry.Events)

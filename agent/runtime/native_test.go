@@ -30,6 +30,11 @@ func TestApplyBundleForcesDefaultTelemetryProfile(t *testing.T) {
 	rt := NewNativeRuntime(nil, nil)
 	err := rt.ApplyBundle(context.Background(), models.Bundle{
 		Version: "custom-rules",
+		Runtime: models.RuntimeConfig{
+			IO: models.RuntimeIOConfig{
+				Local: false,
+			},
+		},
 		Telemetry: models.TelemetryProfile{
 			Events: models.TelemetryEvents{
 				SuspiciousOnly: true,
@@ -51,7 +56,7 @@ func TestApplyBundleForcesDefaultTelemetryProfile(t *testing.T) {
 	if !profile.Events.RuleHit || !profile.Events.FlowSummary || profile.Events.SuspiciousOnly {
 		t.Fatalf("expected default telemetry events to be enforced, got %+v", profile.Events)
 	}
-	if !rt.active.Runtime.IO.Local {
-		t.Fatalf("expected local capture to stay enabled, got %+v", rt.active.Runtime.IO)
+	if rt.active.Runtime.IO.Local {
+		t.Fatalf("expected bundle capture mode to be preserved, got %+v", rt.active.Runtime.IO)
 	}
 }

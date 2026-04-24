@@ -74,7 +74,8 @@ func DefaultTelemetryBundle(version string) models.Bundle {
 
 func MergeWithDefaultTelemetry(bundle models.Bundle) models.Bundle {
 	base := DefaultTelemetryBundle(bundle.Version)
-	bundle.Runtime.IO.Local = base.Runtime.IO.Local || bundle.Runtime.IO.Local
+	// Keep the bundle's capture mode. local=true only sees INPUT/OUTPUT,
+	// while local=false sees FORWARD traffic for gateway/NAT deployments.
 	bundle.Telemetry = base.Telemetry
 	return bundle
 }
